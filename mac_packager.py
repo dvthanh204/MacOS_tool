@@ -14,11 +14,13 @@ import zipfile
 def create_mac_runner_script(presentation_filename: str) -> str:
     """
     Tạo script .command trên macOS để học viên nhấp đúp là mở bài giảng ngay lập tức.
-    Tự động tìm kiếm môi trường Python 3 trên máy Mac (Homebrew, Framework, System).
+    Tương thích tối đa với macOS 14 (Sonoma) và macOS 15 (Sequoia):
+    - Tự động gỡ cờ cách ly Apple Gatekeeper (xattr -cr)
+    - Tự động nhận diện Python 3 và cài đặt thư viện cryptography nếu máy Mac chưa có
     """
     return f"""#!/bin/bash
 # ==============================================================================
-# LOCKSLIDE STUDIO // TRÌNH MỞ BÀI GIẢNG BẢO MẬT TRÊN MACBOOK
+# LOCKSLIDE STUDIO // TRÌNH MỞ BÀI GIẢNG BẢO MẬT TRÊN MACBOOK (macOS 14 & 15)
 # Tự động ghim mã máy lần đầu (TOFU) - Cho phép Chỉnh sửa & Lưu (Cmd+S)
 # ==============================================================================
 DIR="$( cd "$( dirname "${{BASH_SOURCE[0]}}" )" && pwd )"
@@ -26,10 +28,13 @@ cd "$DIR"
 
 echo "================================================================"
 echo "   LOCKSLIDE SECURE PRESENTATION - MACBOOK RUNNER"
-echo "  Đang khởi động trình mở bài giảng bảo mật..."
+echo "  Hỗ trợ tối ưu macOS Sonoma (14) & macOS Sequoia (15)"
 echo "================================================================"
 
-# Tìm kiếm Python 3 trên hệ thống macOS
+# 1. Gỡ bỏ thuộc tính cách ly Gatekeeper (com.apple.quarantine) trên macOS 14 & 15
+xattr -cr "$DIR" 2>/dev/null || true
+
+# 2. Tìm kiếm Python 3 trên hệ thống macOS
 PYTHON_BIN=""
 if command -v python3 &>/dev/null; then
     PYTHON_BIN="python3"
@@ -43,10 +48,17 @@ fi
 
 if [ -z "$PYTHON_BIN" ]; then
     echo "[LỖI] Không tìm thấy Python 3 trên máy Mac này."
-    osascript -e 'display alert "Thiếu Môi Trường Python" message "Để mở bài giảng bảo mật trên macOS, vui lòng cài đặt Python 3 từ python.org hoặc Homebrew." as critical'
+    osascript -e 'display alert "Thiếu Môi Trường Python" message "Để mở bài giảng bảo mật trên MacBook, vui lòng cài đặt Python 3 từ python.org hoặc Homebrew." as critical'
     exit 1
 fi
 
+# 3. Đảm bảo thư viện bảo mật cryptography đã sẵn sàng
+if ! "$PYTHON_BIN" -c "import cryptography" &>/dev/null; then
+    echo "[THÔNG BÁO] Đang thiết lập thư viện mã hóa bảo mật lần đầu..."
+    "$PYTHON_BIN" -m pip install cryptography --user 2>/dev/null || "$PYTHON_BIN" -m pip install cryptography --break-system-packages 2>/dev/null || true
+fi
+
+# 4. Khởi chạy trình mở bài giảng bảo mật
 "$PYTHON_BIN" editor_player_mac.py "{presentation_filename}"
 EXIT_CODE=$?
 

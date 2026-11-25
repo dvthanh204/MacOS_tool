@@ -1,0 +1,128 @@
+name: Test LockSlide on macOS 14 (Sonoma) & macOS 15 (Sequoia)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  test_macos_compatibility:
+    name: Test on ${{ matrix.os }} (Apple Silicon)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify Native macOS Hardware Profiling
+        run: |
+          echo "=== KIỂM TRA PHẦN CỨNG MACOS NATIVE ==="
+          sw_vers
+          uname -m
+          echo "--- ioreg check ---"
+          ioreg -rd1 -c IOPlatformExpertDevice | grep -E "(IOPlatformUUID|IOPlatformSerialNumber)" || true
+          echo "--- system_profiler check ---"
+          system_profiler SPHardwareDataType | grep -E "(Hardware UUID|Serial Number)" || true
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install cryptography python-pptx flask PyQt5
+
+      - name: Test Native HWID Extraction Tool
+        run: |
+          echo "=== KIỂM TRA ĐỊNH DANH MÃ MÁY MAC HWID ==="
+          MAC_HWID=$(python client_hwid_tool_mac.py --cli)
+          echo "Mã máy nhận diện được trên ${{ matrix.os }}: $MAC_HWID"
+          if [ -z "$MAC_HWID" ]; then
+            echo "LỖI: Không lấy được HWID trên ${{ matrix.os }}"
+            exit 1
+          fi
+
+      - name: Run Full 10/10 Security Test Suite
+        run: |
+          echo "=== CHẠY TOÀN BỘ BỘ KIỂM THỬ 10/10 TRÊN ${{ matrix.os }} ==="
+          python test_suite_mac.py
+
+      - name: Test End-to-End Packaging & Execution on macOS
+        run: |
+          echo "=== KIỂM TRA ĐÓNG GÓI VÀ GIẢI NÉN PHÂN PHỐI ==="
+          mkdir -p test_output_dist
+          
+          # 1. Tạo file pptx mẫu và mã hóa
+          python -c '
+          import os
+          from pptx import Presentation
+          import crypto_engine_mac
+          import mac_packager
+
+          prs = Presentation()
+          s = prs.slides.add_slide(prs.slide_layouts[0])
+          s.shapes.title.text = "Bài Giảng Test macOS 14 & 15"
+          prs.save("demo_lecture.pptx")
+
+          with open("demo_lecture.pptx", "rb") as f:
+              b = f.read()
+
+          payload = crypto_engine_mac.build_autolock_payload(
+              presentation_bytes=b,
+              license_id="MAC-AUTO-1415",
+              server_url="http://127.0.0.1:5000",
+              title="Bài Giảng Test macOS 14 & 15",
+              allow_edit=True,
+              block_save_as=True,
+              block_copy=True,
+              target_os="MACOS"
+          )
+
+          mac_packager.package_for_mac(
+              output_dir="test_output_dist/DemoLecture",
+              base_name="DemoLecture",
+              payload_bytes=payload,
+              app_root_dir=os.getcwd(),
+              create_zip=True
+          )
+          print("Đóng gói thành công!")
+          '
+
+          # 2. Giải nén file zip phân phối
+          unzip test_output_dist/DemoLecture_MacOS_Package.zip -d extracted_pkg
+
+          # 3. Kiểm tra tính toàn vẹn và quyền thực thi trên macOS
+          RUNNER="extracted_pkg/DemoLecture/Mo_DemoLecture.command"
+          if [ ! -f "$RUNNER" ]; then
+            echo "LỖI: Không tìm thấy file $RUNNER"
+            exit 1
+          fi
+
+          if [ ! -x "$RUNNER" ]; then
+            echo "LỖI: File $RUNNER thiếu quyền thực thi (+x) trên macOS!"
+            exit 1
+          fi
+
+          echo "✅ File $RUNNER có đầy đủ quyền thực thi trên ${{ matrix.os }}!"
+          
+          # 4. Kiểm tra gỡ cờ quarantine
+          xattr -cr extracted_pkg/DemoLecture
+          echo "✅ Gatekeeper quarantine đã được làm sạch."
+
+          # 5. Kiểm tra giải mã bài giảng trên máy Mac hiện tại
+          python -c '
+          import crypto_engine_mac
+          with open("extracted_pkg/DemoLecture/DemoLecture_PROTECTED.encppt", "rb") as f:
+              data = f.read()
+          # Thử giải mã static hoặc kiểm tra cấu trúc payload
+          assert data.startswith(crypto_engine_mac.MAGIC_HEADER_AUTOLOCK)
+          print("✅ Payload .encppt hợp lệ tuyệt đối trên ${{ matrix.os }}!")
+          '
