@@ -21,6 +21,7 @@ import zipfile
 import sqlite3
 import json
 import io
+import urllib.request
 from pptx import Presentation
 
 import crypto_engine_mac
@@ -65,17 +66,34 @@ def run_all_tests():
     print(f"\n[TEST 1] Đã tạo file PowerPoint mẫu: {test_pptx} ({os.path.getsize(test_pptx)} bytes)")
 
     # --------------------------------------------------------------------------
-    # BƯỚC 2: KHỞI ĐỘNG SERVER BẢN QUYỀN TRÊN PORT RIÊNG
+    # BƯỚC 2: KHỞI ĐỘNG SERVER BẢN QUYỀN TRÊN PORT RIÊNG & CHỜ SẴN SÀNG
     # --------------------------------------------------------------------------
     start_server_in_background("127.0.0.1", TEST_PORT)
-    time.sleep(1)
-    print(f"[TEST 2] Máy chủ cấp phép & thu hồi đã khởi động tại: {TEST_SERVER_URL}")
+    server_ready = False
+    for _ in range(40):
+        try:
+            with urllib.request.urlopen(f"{TEST_SERVER_URL}/", timeout=1.0) as resp:
+                if resp.status == 200:
+                    server_ready = True
+                    break
+        except Exception:
+            time.sleep(0.25)
+    assert server_ready, f"Máy chủ cấp phép không thể lắng nghe tại {TEST_SERVER_URL}!"
+    print(f"[TEST 2] Máy chủ cấp phép & thu hồi đã sẵn sàng tại: {TEST_SERVER_URL}")
 
     # --------------------------------------------------------------------------
     # BƯỚC 3: MÃ HÓA BÀI GIẢNG AUTO-LOCK CHO MACBOOK
     # --------------------------------------------------------------------------
     license_id = "MAC-TEST-999"
     title = "Bài Giảng Kinh Doanh Trên MacBook"
+
+    # Dọn dẹp cache cục bộ cũ nếu có từ lần chạy trước
+    old_cache = crypto_engine_mac.get_local_cache_path(license_id)
+    if os.path.exists(old_cache):
+        try:
+            os.remove(old_cache)
+        except Exception:
+            pass
 
     with open(test_pptx, "rb") as f:
         original_bytes = f.read()
