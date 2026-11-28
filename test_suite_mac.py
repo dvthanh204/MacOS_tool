@@ -153,7 +153,7 @@ def run_all_tests():
     print(f"         -> Server đã tự động ghim bài giảng vào máy Mac A: {row[0]} ({row[1]})")
 
     # --------------------------------------------------------------------------
-    # BƯỚC 5: KIỂM TRA RIBBON & BACKSTAGE POLICY BÊN TRONG FILE PPTX
+    # BƯỚC 5: KIỂM TRA RIBBON, QAT & BACKSTAGE POLICY BÊN TRONG FILE PPTX
     # --------------------------------------------------------------------------
     print(f"\n[TEST 5] Kiểm tra cấu trúc OpenXML và Ribbon Policy trong dữ liệu giải mã:")
     with zipfile.ZipFile(io.BytesIO(dec_bytes_a), "r") as z:
@@ -163,9 +163,12 @@ def run_all_tests():
         custom_ui_xml = z.read("customUI/customUI14.xml").decode("utf-8")
         assert 'idMso="Copy"' in custom_ui_xml, "Ribbon không khóa Copy!"
         assert 'idMso="FileSaveAs"' in custom_ui_xml, "Ribbon không khóa FileSaveAs!"
+        assert '<qat>' in custom_ui_xml, "Ribbon không cấu hình QAT để ẩn công cụ Save As!"
+        assert 'idMso="SaveACopy"' in custom_ui_xml, "Ribbon không khóa SaveACopy!"
+        assert 'idMso="DuplicatePresentation"' in custom_ui_xml, "Ribbon không khóa DuplicatePresentation!"
         assert 'idMso="TabSave"' in custom_ui_xml, "Backstage không ẩn TabSave!"
     print(f"         -> customUI14.xml & customUI.xml tồn tại trong gói tin")
-    print(f"         -> Khóa triệt để Save As & Copy trên PowerPoint for Mac!")
+    print(f"         -> Khóa triệt để Save As, QAT, Duplicate & Copy trên PowerPoint for Mac!")
 
     # --------------------------------------------------------------------------
     # BƯỚC 6: KHÁCH A CHỈNH SỬA BÀI GIẢNG VÀ LƯU (AUTO-SAVE SYNC)

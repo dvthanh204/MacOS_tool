@@ -11,9 +11,15 @@ Hệ thống bảo vệ đa lớp tương thích kiến trúc hash_win:
    - Real-time Auto-Sync: Mỗi khi bấm Lưu hoặc khi đóng bài giảng, hệ thống tự động
      phát hiện thay đổi và re-encrypt đồng bộ ngay lập tức vào file mã hóa gốc (.encppt).
 2. CẤM TUYỆT ĐỐI SAVE AS (KHÔNG THỂ LƯU RA FILE MỚI TRÊN MAC):
-   - Ribbon & Backstage XML tiêm sẵn vô hiệu hóa toàn bộ Save As, Save a Copy, Export, Print.
+   - Ribbon & QAT XML tiêm sẵn vô hiệu hóa toàn bộ Save As, Save a Copy, Export, Duplicate, Print.
+   - SaveAsHunterMac Thread: Luồng chạy ngầm quét mỗi 0.15s, tự động phát hiện và đóng/hủy
+     ngay tức thì bất kỳ hộp thoại hoặc Sheet Save As nào xuất hiện trong PowerPoint for Mac!
+   - AntiExfiltrationSentinelMac: Giám sát hệ thống tệp, tiêu hủy ngay lập tức bất kỳ file
+     PowerPoint/PDF nào được người dùng cố tình trích xuất ra Desktop/Downloads.
+   - Tối ưu đường dẫn Runtime: Loại bỏ cờ cách ly (quarantine), đảm bảo nút "Lưu lại" (Cmd+S)
+     thực hiện lưu trực tiếp (in-place save) mà KHÔNG bị PowerPoint ép bật hộp thoại Save As.
 3. CẤM TUYỆT ĐỐI COPY NỘI DUNG RA NGOÀI:
-   - Khóa Copy/Cut trên Ribbon và Context Menu.
+   - Khóa Copy/Cut/Duplicate trên Ribbon và Context Menu.
    - Hỗ trợ Clipboard Guard dọn dẹp bộ nhớ đệm nếu phát hiện trích xuất.
 4. TỰ ĐỘNG GHIM MÃ MÁY MAC LẦN ĐẦU (Auto-Lock TOFU) & THU HỒI TỪ XA:
    - Nhận diện đúng Apple Hardware UUID + Mac Serial Number.
@@ -100,7 +106,6 @@ def is_running_from_temp_archive(file_path: str) -> bool:
             rel = os.path.relpath(norm, temp_dir).lower()
             if any(k in rel for k in ["temp", "rar$", "7z", ".zip", "cpt", "archive"]):
                 return True
-        # Kiểm tra thêm đường dẫn macOS private/var/folders
         if any(p in norm for p in ["/private/var/folders", "/var/folders"]):
             if any(k in norm for k in ["temp", ".zip", "archive", "appkit"]):
                 return True
@@ -191,7 +196,6 @@ if HAS_PYQT:
             title.setAlignment(Qt.AlignCenter)
             layout.addWidget(title)
 
-            # Box lỗi
             box_err = QFrame()
             box_err.setStyleSheet("background-color: #161F30; border: 1px solid #334155; border-radius: 10px; padding: 14px;")
             l_err = QVBoxLayout(box_err)
@@ -201,7 +205,6 @@ if HAS_PYQT:
             l_err.addWidget(lbl_err)
             layout.addWidget(box_err)
 
-            # Khung HWID
             card_hwid = QFrame()
             card_hwid.setStyleSheet("background-color: #0E1524; border: 1px solid #1E293B; border-radius: 10px; padding: 12px;")
             l_hw = QVBoxLayout(card_hwid)
@@ -246,7 +249,6 @@ def show_hwid_error_dialog(error_msg: str, hwid: str):
         app.exec_()
         return
 
-    # Fallback Tkinter nếu máy Mac không có PyQt5
     try:
         import tkinter as tk
         from tkinter import messagebox
@@ -275,6 +277,131 @@ def show_hwid_error_dialog(error_msg: str, hwid: str):
         root.mainloop()
     except Exception:
         print(f"\n[BẢN QUYỀN KHÔNG HỢP LỆ]\n{error_msg}\nMã máy Mac: {hwid}\n")
+
+
+# ==============================================================================
+# BẢO VỆ CHỐNG SAVE AS ĐA TẦNG TRÊN MACOS (SAVE AS HUNTER & SENTINEL)
+# ==============================================================================
+
+class SaveAsHunterMac(threading.Thread):
+    """
+    Bộ săn và hủy hộp thoại Save As trên macOS (Tương đương SaveAsDialogHunter trên Windows).
+    Quét liên tục mỗi 0.15s:
+    - Nếu phát hiện bất kỳ Sheet Save As / Export / Duplicate nào xuất hiện trên cửa sổ PowerPoint -> Đóng ngay tức thì!
+    - Nếu phát hiện cửa sổ thoại con (AXDialog) liên quan đến Save As -> Đóng ngay tức thì!
+    Nhờ vậy, ngay cả khi người dùng nhấn phím tắt Cmd+Shift+S hoặc click menu File -> Save As,
+    hộp thoại sẽ bị hủy trong chớp mắt và KHÔNG THỂ lưu ra file mới.
+    """
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.running = True
+
+    def run(self):
+        if sys.platform != "darwin":
+            return
+
+        as_hunter_cmd = [
+            "osascript", "-e",
+            '''tell application "System Events"
+                if exists (processes where name is "Microsoft PowerPoint") then
+                    tell process "Microsoft PowerPoint"
+                        -- 1. Quét và đóng mọi Sheet (Save As Sheet, Export Sheet)
+                        repeat with w in (every window)
+                            if exists (sheets of w) then
+                                repeat with s in (sheets of w)
+                                    try
+                                        click button "Cancel" of s
+                                    on error
+                                        try
+                                            key code 53 -- Esc
+                                        end try
+                                    end try
+                                end repeat
+                            end if
+                        end repeat
+                        -- 2. Quét và đóng các cửa sổ hộp thoại thoại độc lập (AXDialog)
+                        repeat with w in (every window whose subrole is "AXDialog")
+                            try
+                                click button "Cancel" of w
+                            on error
+                                try
+                                    key code 53 -- Esc
+                                end try
+                            end try
+                        end repeat
+                    end tell
+                end if
+            end tell'''
+        ]
+
+        while self.running:
+            time.sleep(0.15)
+            try:
+                subprocess.run(as_hunter_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.8)
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+
+
+class AntiExfiltrationSentinelMac(threading.Thread):
+    """
+    Luồng bảo vệ hệ thống tệp trên macOS:
+    Theo dõi các thư mục mà người dùng có thể Save As tới (Desktop, Downloads, Documents, Thư mục hiện tại).
+    Nếu phát hiện bất kỳ file PowerPoint/PDF nào mới được sinh ra ngoài file quản lý,
+    lập tức tiêu hủy file đó để ngăn ngừa lộ lọt dữ liệu.
+    """
+    def __init__(self, safe_filepath: str, source_filepath: str = None):
+        super().__init__(daemon=True)
+        self.safe_filepath = os.path.normcase(os.path.abspath(safe_filepath))
+        self.source_filepath = os.path.normcase(os.path.abspath(source_filepath)) if source_filepath else ""
+        self.running = True
+
+        self.monitored_dirs = []
+        candidates = [
+            os.path.dirname(self.source_filepath) if self.source_filepath else "",
+            os.path.expanduser("~/Desktop"),
+            os.path.expanduser("~/Downloads"),
+            os.path.expanduser("~/Documents")
+        ]
+        for c in candidates:
+            if c and os.path.isdir(c) and c not in self.monitored_dirs:
+                self.monitored_dirs.append(c)
+
+        self.initial_snapshots = {}
+        for d in self.monitored_dirs:
+            try:
+                self.initial_snapshots[d] = set(os.listdir(d))
+            except Exception:
+                self.initial_snapshots[d] = set()
+
+    def run(self):
+        while self.running:
+            time.sleep(0.5)
+            for d in self.monitored_dirs:
+                try:
+                    current_files = set(os.listdir(d))
+                    new_files = current_files - self.initial_snapshots.get(d, set())
+                    for nf in new_files:
+                        full_p = os.path.normcase(os.path.abspath(os.path.join(d, nf)))
+                        if full_p == self.safe_filepath or full_p == self.source_filepath:
+                            continue
+                        low = nf.lower()
+                        if low.endswith((".pptx", ".ppt", ".pptm", ".pdf", ".odp", ".potx")):
+                            try:
+                                if os.path.isfile(full_p):
+                                    with open(full_p, "wb") as fw:
+                                        fw.write(b"\x00" * min(os.path.getsize(full_p), 1024 * 1024))
+                                    os.remove(full_p)
+                                    print(f"[LockSlide Mac Guard] ⚠️ Đã chặn và tiêu hủy file trích xuất trái phép: {nf}")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+    def stop(self):
+        self.running = False
 
 
 # ==============================================================================
@@ -339,7 +466,6 @@ def launch_powerpoint_mac(file_path: str) -> subprocess.Popen | None:
     """Khởi động file PowerPoint trực tiếp trên macOS"""
     if sys.platform == "darwin":
         try:
-            # Mở bằng Microsoft PowerPoint
             return subprocess.Popen(["open", "-a", "Microsoft PowerPoint", file_path])
         except Exception:
             return subprocess.Popen(["open", file_path])
@@ -360,13 +486,33 @@ def run_powerpoint_editor_mac(
 ) -> bool:
     """
     Khởi động PowerPoint trên MacBook ở CHẾ ĐỘ CHỈNH SỬA & TỰ ĐỘNG ĐỒNG BỘ LƯU:
-    - CHO PHÉP SỬA & LƯU: Khi khách bấm Cmd+S hoặc lưu trong PowerPoint, hệ thống tự động
-      phát hiện thay đổi và re-encrypt đồng bộ ngay lập tức vào file .encppt gốc!
-    - CẤM SAVE AS: Ribbon Policy chặn triệt để Save As và Export.
+    - CHO PHÉP SỬA & LƯU: Nút 'Lưu lại' (Cmd+S / Save) thực hiện lưu trực tiếp (in-place save),
+      luồng Auto-Save Sync bắt thay đổi và re-encrypt đồng bộ ngay vào file .encppt gốc!
+    - CẤM SAVE AS 4 LỚP:
+      1. Ribbon & QAT XML: Vô hiệu hóa toàn bộ lệnh Save As, Duplicate, Export, Share.
+      2. Tối ưu Runtime: Không dùng thư mục ẩn, làm sạch cờ quarantine để tránh PowerPoint ép bật Save As.
+      3. SaveAsHunterMac: Luồng săn ngầm 0.15s đóng ngay tức thì mọi Sheet/Dialog Save As.
+      4. AntiExfiltrationSentinelMac: Giám sát và tiêu hủy ngay mọi file trích xuất ra ngoài.
     - CẤM COPY: Ribbon Policy chặn triệt để Copy và Cut.
     - AN TOÀN TUYỆT ĐỐI: Dữ liệu tạm được tiêu hủy và xóa sạch khi tắt bài giảng.
     """
-    temp_dir = tempfile.mkdtemp(prefix=".mac_lockslide_")
+    # Tạo thư mục làm việc chuẩn (không bắt đầu bằng dấu chấm ẩn để tránh bị PowerPoint coi là temp read-only)
+    if sys.platform == "darwin":
+        runtime_base = os.path.expanduser("~/Library/Application Support/LockSlideSecure/runtime")
+    else:
+        runtime_base = os.path.join(tempfile.gettempdir(), "LockSlideSecure_runtime")
+
+    try:
+        os.makedirs(runtime_base, exist_ok=True)
+    except Exception:
+        runtime_base = tempfile.gettempdir()
+
+    temp_dir = tempfile.mkdtemp(prefix="work_", dir=runtime_base)
+    try:
+        os.chmod(temp_dir, 0o755)
+    except Exception:
+        pass
+
     safe_title = "".join(c for c in metadata.get("title", "presentation") if c.isalnum() or c in (" ", "_", "-")).strip() or "presentation"
     temp_file = os.path.join(temp_dir, f"{safe_title}.pptx")
 
@@ -374,12 +520,31 @@ def run_powerpoint_editor_mac(
     last_known_bytes = presentation_bytes
     current_payload = source_payload_bytes
 
+    save_as_hunter = None
+    sentinel = None
+
     try:
         with open(temp_file, "wb") as f:
             f.write(presentation_bytes)
 
+        # Trên macOS: Làm sạch hoàn toàn cờ quarantine com.apple.quarantine
+        if sys.platform == "darwin":
+            try:
+                subprocess.run(["xattr", "-c", temp_file], stderr=subprocess.DEVNULL)
+                os.chmod(temp_file, 0o644)
+            except Exception:
+                pass
+
         initial_mtime = os.path.getmtime(temp_file)
         last_synced_mtime = initial_mtime
+
+        # Khởi động luồng săn và hủy hộp thoại Save As
+        save_as_hunter = SaveAsHunterMac()
+        save_as_hunter.start()
+
+        # Khởi động luồng giám sát chống trích xuất file
+        sentinel = AntiExfiltrationSentinelMac(safe_filepath=temp_file, source_filepath=source_file_path)
+        sentinel.start()
 
         # Khởi chạy PowerPoint
         print(f"[LockSlide Mac] Đang mở bài giảng '{metadata.get('title')}' trên PowerPoint...")
@@ -389,7 +554,7 @@ def run_powerpoint_editor_mac(
         time.sleep(2.0)
         print(f"[LockSlide Mac] ✓ Đã mở bài giảng ở CHẾ ĐỘ CHỈNH SỬA (EDITABLE).")
         print(f"[LockSlide Mac] -> Bạn có thể gõ chữ, chỉnh sửa và bấm Cmd+S để lưu lại.")
-        print(f"[LockSlide Mac] -> Luồng Auto-Save Sync đang chạy ngầm để bảo vệ dữ liệu...")
+        print(f"[LockSlide Mac] -> Luồng Auto-Save Sync và Save-As Hunter đang chạy ngầm để bảo vệ dữ liệu...")
 
         # VÒNG LẶP THEO DÕI & TỰ ĐỘNG LƯU (AUTO-SAVE SYNC)
         consecutive_missing = 0
@@ -406,7 +571,6 @@ def run_powerpoint_editor_mac(
                 else:
                     consecutive_missing = 0
             elif proc and proc.poll() is not None:
-                # Nếu chạy dạng process độc lập
                 break
 
             # Kiểm tra xem người dùng có vừa nhấn Save (Cmd+S / Ctrl+S)
@@ -451,6 +615,12 @@ def run_powerpoint_editor_mac(
         return False
 
     finally:
+        # DỪNG CÁC LUỒNG BẢO VỆ
+        if save_as_hunter:
+            save_as_hunter.stop()
+        if sentinel:
+            sentinel.stop()
+
         # TIÊU HỦY AN TOÀN FILE TẠM (SHRED & DELETE)
         if os.path.exists(temp_file):
             for _ in range(5):
@@ -532,7 +702,6 @@ def main():
     if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
         target_file = os.path.abspath(sys.argv[1])
     else:
-        # Nếu chạy không tham số (ví dụ nhấp đúp script), kiểm tra các file .encppt trong thư mục hiện tại
         cwd = os.getcwd()
         enc_files = [os.path.join(cwd, f) for f in os.listdir(cwd) if f.lower().endswith(".encppt")]
         if len(enc_files) == 1:
@@ -541,7 +710,6 @@ def main():
             target_file = enc_files[0]
 
     if not target_file or not os.path.exists(target_file):
-        # Mở hộp thoại chọn file
         if HAS_PYQT:
             app = QApplication.instance() or QApplication(sys.argv)
             selected, _ = QFileDialog.getOpenFileName(
