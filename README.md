@@ -1,7 +1,11 @@
-# LOCKSLIDE STUDIO MACOS v2.5 - HỆ THỐNG MÃ HÓA & BẢO MẬT POWERPOINT DÀNH CHO MACBOOK
+# LOCKSLIDE STUDIO MACOS v3.0 - HỆ THỐNG MÃ HÓA & ĐÓNG GÓI BÀI GIẢNG POWERPOINT ĐỘC LẬP CHO MACBOOK (.ZIP)
 
-Hệ thống được phát triển chuyên biệt dành cho người dùng **MacBook (macOS)**, chuyển giao và kế thừa 100% chuẩn logic bảo mật của **hash_win**:
-**MỞ BÀI GIẢNG TRÊN MACBOOK VẪN CHỈNH SỬA VÀ LƯU ĐƯỢC (EDITABLE MODE + AUTO-SAVE SYNC)**, đồng thời **CẤM TUYỆT ĐỐI SAVE AS LƯU FILE MỚI** và **CHẶN SAO CHÉP (COPY/CUT) DỮ LIỆU RA NGOÀI**.
+Hệ thống được phát triển chuyên biệt dành cho người dùng **MacBook (macOS Sonoma 14 & Sequoia 15)**, kế thừa và đồng bộ 100% chuẩn tính năng của **hash_win**:
+- **100% NGOẠI TUYẾN HOẶC CLOUD GOOGLE SHEETS MIỄN PHÍ:** Hỗ trợ kích hoạt 1 lần duy nhất qua Google Sheets hoặc chạy hoàn toàn Offline không cần mạng.
+- **MỖI BÀI GIẢNG XUẤT RA 1 FILE .ZIP ĐỘC LẬP:** Dễ dàng gửi cho khách hàng, bên trong có sẵn file chạy 1-click `.command` dành riêng cho macOS.
+- **TỰ ĐỘNG GHIM BẢN QUYỀN VÀO MÁY MAC KHÁCH (AUTO-LOCK TOFU):** Khi khách mở lần đầu, bài giảng tự động khóa cứng vào mã máy Mac (IOPlatformUUID + Serial). Tự động đồng bộ ghim luôn vào file nén `.zip` gốc để chống chia sẻ.
+- **CHỈNH SỬA & LƯU NỘI DUNG BÌNH THƯỜNG TRÊN POWERPOINT FOR MAC (Cmd+S):** Thoải mái sửa slide, chèn ảnh, paste text và lưu bài.
+- **CẤM TUYỆT ĐỐI SAVE AS & CHẶN COPY:** Vô hiệu hóa tính năng lưu file mới và sao chép nội dung ra ngoài.
 
 ---
 
@@ -24,65 +28,65 @@ Hệ thống được phát triển chuyên biệt dành cho người dùng **Ma
 
 4. **CHẶN SAO CHÉP (COPY/CUT) DỮ LIỆU:**
    - Vô hiệu hóa lệnh `Copy`, `Cut`, `SlideCopy` trên thanh công cụ Ribbon và context menu chuột phải.
-   - Cho phép `Cmd+V` (Dán) để người dùng đưa dữ liệu của họ vào bài giảng.
+   - Khóa phím tắt sao chép khi làm việc trên bài giảng, ngăn ngừa sao chép nội dung giáo án ra ngoài.
 
-5. **TỰ ĐỘNG GHIM THIẾT BỊ LẦN ĐẦU (FIRST-RUN AUTO-LOCK / TOFU TRÊN MAC):**
-   - Định danh phần cứng duy nhất của MacBook dựa trên: **Apple Hardware UUID** + **Mac Serial Number** (`IOPlatformUUID` + `IOPlatformSerialNumber`).
-   - Tác giả không cần hỏi trước mã máy của khách hàng.
-   - Khi khách mở file lần đầu trên Mac, hệ thống tự động bắt mã máy Mac và khóa cứng bài giảng vào máy tính đó.
-   - **Chống chuyển tiếp 100%**: Nếu khách đem gửi file cho người khác -> Máy Mac thứ 2 sẽ bị từ chối truy cập ngay lập tức!
-   - Hỗ trợ lưu cache kích hoạt cục bộ (`~/Library/Application Support/LockSlideSecure/`) cho phép mở Offline sau lần đầu đã ghim.
+5. **TỰ ĐỘNG GHIM THIẾT BỊ LẦN ĐẦU (FIRST-RUN AUTO-LOCK / TOFU):**
+   - Tác giả chỉ cần mã hóa bài giảng và gửi file nén `.zip` cho khách dùng Mac, không cần hỏi trước mã máy tính của khách.
+   - Khi khách nhấp đúp file `Mo_[Tên].command` lần đầu: Hệ thống tự động thu thập ID phần cứng (Hardware ID: Apple Hardware UUID + Mac Serial Number) và khóa cứng bài giảng vào máy Mac đó.
+   - **Đồng bộ vào file .zip gốc:** Hệ thống tự động cập nhật bản quyền ngược lại file `.zip` gốc trên máy khách. Nếu khách gửi cả file `.zip` cho người khác thì máy thứ 2 cũng **BỊ CHẶN 100%**!
 
-6. **THU HỒI TỪ XA TỨC THÌ (REMOTE KILL-SWITCH):**
-   - Quản trị viên chỉ cần nhấn **"Thu hồi"** trên giao diện Studio hoặc Web Dashboard bất cứ lúc nào.
-   - Bài giảng trên máy Mac của khách lập tức bị khóa.
-   - Quản trị viên có thể nhấn **"Khôi phục"** hoặc **"Đổi máy"** (cho phép khách chuyển sang máy Mac mới).
-
----
-
-## 📁 CẤU TRÚC THƯ MỤC DỰ ÁN HASH_MAC
-
-```
-hash_mac/
-├── app_mac.py                   # Giao diện chính Studio mã hóa cho Mac (PyQt5 Dark Tech Theme)
-├── crypto_engine_mac.py         # Động cơ mã hóa AES-256-GCM, định danh Mac HWID, Auto-Lock & Re-encrypt
-├── ribbon_policy_mac.py         # Bộ tiêm cấu hình Ribbon XML & dọn dẹp font tối ưu cho PowerPoint for Mac
-├── editor_player_mac.py         # Trình mở bài giảng bảo mật trên MacBook, Auto-Save Sync & dọn dẹp RAM/Disk
-├── license_server.py            # Máy chủ Flask + SQLite quản lý ghim máy Mac, thu hồi từ xa & Web Dashboard
-├── client_hwid_tool_mac.py      # Công cụ 1-click cho người dùng Mac lấy mã máy HWID
-├── mac_packager.py              # Đóng gói xuất trọn bộ cho Mac: .encppt, Mo_...command, .zip bảo lưu quyền POSIX
-├── test_suite_mac.py            # Bộ kiểm thử tự động 10/10 bài test kiểm chứng toàn diện tính năng trên Mac
-├── CHAY_APP_MAC.bat             # Khởi động Studio trên Windows để xuất file cho Mac
-├── CHAY_APP_MAC.command         # Khởi động Studio trực tiếp trên macOS
-├── LAY_MA_MAY_MAC.command       # Script lấy mã máy Mac cho khách hàng
-├── MO_FILE_MA_HOA_MAC.command   # Script mở file mã hóa trên Mac
-└── result_mac/                  # Thư mục xuất bài giảng phân phối cho MacBook
-```
+6. **MÁY CHỦ BẢN QUYỀN GOOGLE SHEETS (MIỄN PHÍ 100%):**
+   - Tích hợp sẵn mẫu Google Apps Script (`google_apps_script_server.js`).
+   - Tác giả chỉ cần 1 phút tạo Google Sheet và dán code để có ngay máy chủ bản quyền đám mây.
+   - Quản lý tập trung mọi lượt mở: Tên bài giảng, mã máy Mac (HWID), ngày giờ kích hoạt.
+   - Hỗ trợ đổi trạng thái thành `REVOKED` trên Google Sheet để **khóa bài giảng từ xa** bất cứ lúc nào!
 
 ---
 
 ## 🚀 HƯỚNG DẪN SỬ DỤNG
 
-### 1. Khởi động Giao diện Studio:
-- **Nếu chạy trên Windows để xuất file cho khách Mac:** Chạy `CHAY_APP_MAC.bat` (hoặc `python app_mac.py`).
-- **Nếu chạy trực tiếp trên máy Mac:** Nhấp đúp `CHAY_APP_MAC.command` (hoặc `python3 app_mac.py`).
+### 1. Khởi động Giao diện Quản trị Studio:
+- **Trên MacBook:** Nhấp đúp file `CHAY_APP_MAC.command` (hoặc `CHAY_LOCKSLIDE_STUDIO_MAC.command`).
+- **Trên Windows / Linux:** Chạy file `CHAY_APP_MAC.bat` hoặc lệnh `python app_mac.py`.
 
-### 2. Mã hóa bài giảng:
-1. Kéo thả file PowerPoint (`.pptx`, `.ppt`) vào khung nhận diện màu xanh neon.
+### 2. Thiết lập máy chủ Google Sheets (Khuyên dùng):
+1. Bấm nút **"📋 Code & Hướng Dẫn Google Sheets (Miễn Phí)"** trên giao diện.
+2. Bấm **"🌐 Mở Google Sheets (sheets.new)"** để tạo 1 bảng tính Google mới.
+3. Vào **Tiện ích mở rộng (Extensions)** -> **Apps Script** -> Dán code đã sao chép.
+4. Bấm **Triển khai (Deploy)** -> **Tùy chọn triển khai mới (New deployment)** -> Chọn **Ứng dụng web (Web app)** -> Thực thi dưới dạng **Tôi**, Ai có quyền truy cập: **Bất kỳ ai**.
+5. Copy link URL dán vào ô **MÁY CHỦ BẢN QUYỀN**.
+
+### 3. Mã hóa bài giảng:
+1. Kéo thả một hoặc nhiều file PowerPoint (`.pptx`, `.pptm`, `.ppt`) vào khung nhận diện màu xanh neon.
 2. Kiểm tra các tùy chọn an toàn:
-   - ✅ **Cho phép mở sửa bài giảng (Edit)**: Đang bật
-   - ✅ **Khóa 'Save As' chống lưu file mới**: Đang bật
-   - ✅ **Khóa Copy / Sao chép nội dung**: Đang bật
-   - ✅ **Đóng gói .zip bảo lưu quyền macOS**: Đang bật
-3. Bấm nút **"BẮT ĐẦU MÃ HÓA & ĐÓNG GÓI MACBOOK"**.
+   - ✅ **Cho phép sửa & lưu (Cmd+S)**: Đang bật
+   - ✅ **Cấm 'Save As' & 'Export'**: Đang bật
+   - ✅ **Cấm 'Copy' (Cmd+C)**: Đang bật
+3. Bấm nút **"BẮT ĐẦU MÃ HÓA & ĐÓNG GÓI .ZIP"**.
 
-### 3. Gửi cho khách hàng MacBook:
-- Mở thư mục `result_mac/`.
-- Lấy thư mục bài giảng hoặc file `[Tên_Bài]_MacOS_Package.zip` gửi cho khách hàng.
+### 4. Gửi cho khách hàng:
+- Vào thư mục `result_mac`, lấy file nén `[Tên_Bài].zip` gửi cho học viên.
+- Học viên giải nén và nhấp đúp file `Mo_[Tên_Bài].command` để mở bài giảng ngay lập tức!
+- Nếu cần lấy mã máy Mac độc lập, học viên chạy file `LAY_MA_MAY_MAC.command`.
 
-### 4. Mở bài giảng trên MacBook (Phía khách hàng):
-- Khách hàng giải nén file zip trên máy Mac.
-- Nhấp đúp file `Mo_[Tên_Bài].command` để mở bài giảng.
-- Bài giảng xuất hiện trong Microsoft PowerPoint for Mac ở chế độ thiết kế đầy đủ.
-- Khách hàng có thể sửa đổi nội dung và bấm `Cmd+S` để lưu lại.
-- Khi đóng bài giảng, toàn bộ thay đổi đã được tự động mã hóa đồng bộ an toàn vào file gốc.
+---
+
+## 📂 CẤU TRÚC HỆ THỐNG MACBOOK
+
+```
+hash_mac/
+├── app_mac.py                       # Giao diện chính LockSlide Studio macOS (PyQt5)
+├── crypto_engine_mac.py             # Lõi mã hóa AES-256-GCM, Mac HWID & Auto-Lock TOFU
+├── editor_player_mac.py             # Trình mở PowerPoint for Mac, Editable & Auto-Save Sync
+├── mac_packager.py                  # Module đóng gói trọn gói macOS & nén .ZIP độc lập
+├── ribbon_policy_mac.py             # OpenXML Fluent UI Ribbon Policy cho Office for Mac
+├── client_hwid_tool_mac.py          # Tool lấy mã máy Mac độc lập (GUI + CLI)
+├── google_apps_script_server.js     # Script máy chủ Google Sheets miễn phí 100%
+├── config.json                      # Cấu hình URL máy chủ bản quyền
+├── test_suite_mac.py                # Bộ test tự động kiểm thử toàn diện
+├── CHAY_APP_MAC.command             # File 1-click khởi động Studio trên MacBook
+├── CHAY_LOCKSLIDE_STUDIO_MAC.command# Shortcut 1-click tương thích tên gọi hash_win
+├── LAY_MA_MAY_MAC.command           # File 1-click lấy mã máy Mac cho khách
+├── MO_FILE_MA_HOA_MAC.command       # File 1-click mở file mã hóa trực tiếp
+└── result_mac/                      # Thư mục chứa các file .zip xuất bản thành phẩm
+```

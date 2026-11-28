@@ -102,7 +102,11 @@ jobs:
           '
 
           # 2. Giải nén file zip phân phối
-          unzip test_output_dist/DemoLecture_MacOS_Package.zip -d extracted_pkg
+          if [ -f "test_output_dist/DemoLecture_MacOS_Package.zip" ]; then
+            unzip test_output_dist/DemoLecture_MacOS_Package.zip -d extracted_pkg
+          else
+            unzip test_output_dist/DemoLecture.zip -d extracted_pkg
+          fi
 
           # 3. Kiểm tra tính toàn vẹn và quyền thực thi trên macOS
           RUNNER="extracted_pkg/DemoLecture/Mo_DemoLecture.command"

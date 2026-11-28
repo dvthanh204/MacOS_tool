@@ -3,10 +3,12 @@ Module: crypto_engine_mac.py
 Hệ Thống Bảo Mật, Định Danh Phần Cứng MacBook (Mac HWID) & Mã Hóa AES-256-GCM cho macOS
 Tuân thủ 100% chuẩn cấu trúc và logic bảo mật của hash_win:
 1. Auto-Lock First Run (TOFU - Tự động bắt & ghim ID máy tính Mac khi mở lần đầu)
-2. Chống chia sẻ / chuyển tiếp cho máy khác: Máy thứ 2 bị chặn 100%
-3. HỖ TRỢ CHỈNH SỬA VÀ LƯU BÀI GIẢNG (Editable Mode + Auto-Save Sync Back)
-4. Tích hợp chính sách Ribbon Policy tối ưu cho Office for Mac (Cấm Save As, Cho phép Edit, Paste, Save)
-5. Hỗ trợ định danh phần cứng native macOS (IOPlatformUUID + IOPlatformSerialNumber) và cross-platform
+2. Hỗ trợ Google Sheets (Apps Script) làm máy chủ bản quyền đám mây miễn phí 100%
+3. Hỗ trợ Chế độ Ngoại Tuyến 100% (Offline Auto-Lock) không cần mạng
+4. Chống chia sẻ / chuyển tiếp cho máy khác: Máy thứ 2 bị chặn 100%
+5. HỖ TRỢ CHỈNH SỬA VÀ LƯU BÀI GIẢNG TRÊN MACBOOK (Editable Mode + Auto-Save Sync Back)
+6. Tích hợp chính sách Ribbon Policy tối ưu cho Office for Mac (Cấm Save As, Cho phép Edit, Paste, Save)
+7. Hỗ trợ định danh phần cứng native macOS (IOPlatformUUID + IOPlatformSerialNumber) và cross-platform
 """
 
 import os
@@ -18,6 +20,7 @@ import datetime
 import subprocess
 import tempfile
 import urllib.request
+import urllib.parse
 import urllib.error
 import re
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -133,74 +136,213 @@ def get_machine_hwid() -> str:
             raw_seed = f"MAC::{serial_str}::{uuid_str}"
         else:
             import platform
-            import uuid as py_uuid
-            node_id = py_uuid.getnode()
-            raw_seed = f"MAC_FALLBACK::{platform.node()}::{node_id}"
+            raw_seed = f"MAC_NODE::{platform.node()}::{platform.machine()}"
     elif sys.platform == "win32":
         raw_seed = get_windows_hwid()
     else:
-        # Linux / Unix fallback
-        import platform
-        import uuid as py_uuid
-        raw_seed = f"UNIX::{platform.node()}::{py_uuid.getnode()}"
+        try:
+            with open("/etc/machine-id", "r") as f:
+                raw_seed = f.read().strip()
+        except Exception:
+            import platform
+            raw_seed = platform.node()
 
     digest = hashlib.sha256(raw_seed.encode("utf-8")).hexdigest().upper()
     return f"{digest[:4]}-{digest[4:8]}-{digest[8:12]}-{digest[12:16]}"
 
 
 def derive_key(seed: str, salt: bytes) -> bytes:
-    """
-    Tạo khóa mã hóa AES-256 từ seed bằng PBKDF2 (100.000 vòng lặp)
-    """
-    clean_seed = seed.strip().upper()
+    """Hàm tạo khóa dẫn xuất chuẩn quân sự PBKDF2 HMAC-SHA256 (100,000 iterations)"""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100_000,
+        iterations=100000,
     )
-    return kdf.derive(clean_seed.encode("utf-8"))
+    return kdf.derive(seed.encode("utf-8"))
 
 
 def get_local_cache_path(license_id: str) -> str:
-    """
-    Đường dẫn lưu token kích hoạt cục bộ trên máy khách.
-    Trên macOS: ~/Library/Application Support/LockSlideSecure/<hash>.act
-    Trên Windows: %LOCALAPPDATA%/LockSlideSecure/<hash>.act
-    """
+    """Đường dẫn lưu token kích hoạt cục bộ trên máy khách (hỗ trợ macOS và Windows)"""
     if sys.platform == "darwin":
-        base_dir = os.path.expanduser("~/Library/Application Support")
+        app_support = os.path.expanduser("~/Library/Application Support")
+        cache_dir = os.path.join(app_support, "LockSlideSecure")
+    elif sys.platform == "win32":
+        local_app_data = os.getenv("LOCALAPPDATA", os.path.expanduser("~"))
+        cache_dir = os.path.join(local_app_data, "LockSlideSecure")
     else:
-        base_dir = os.getenv("LOCALAPPDATA", os.path.expanduser("~"))
+        cache_dir = os.path.expanduser("~/.lockslide_secure")
 
-    cache_dir = os.path.join(base_dir, "LockSlideSecure")
-    os.makedirs(cache_dir, exist_ok=True)
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+    except Exception:
+        cache_dir = tempfile.gettempdir()
+
     safe_name = hashlib.md5(license_id.encode("utf-8")).hexdigest()
     return os.path.join(cache_dir, f"{safe_name}.act")
 
 
+def _write_activation_cache(cache_file: str, license_id: str, hwid: str):
+    """Lưu token kích hoạt mã hóa vào bộ nhớ cache của máy"""
+    try:
+        cache_salt = os.urandom(16)
+        hw_key = derive_key(hwid, cache_salt)
+        cache_nonce = os.urandom(12)
+        aesgcm = AESGCM(hw_key)
+        token_str = f"ACTIVATED::{license_id}::{hwid}"
+        encrypted_token = aesgcm.encrypt(cache_nonce, token_str.encode("utf-8"), None)
+        with open(cache_file, "wb") as f:
+            f.write(cache_salt + cache_nonce + encrypted_token)
+    except Exception:
+        pass
+
+
+def _clear_activation_cache(cache_file: str):
+    """Xóa bỏ cache kích hoạt khi bản quyền bị thu hồi"""
+    if os.path.exists(cache_file):
+        try:
+            os.remove(cache_file)
+        except Exception:
+            pass
+
+
+def update_payload_metadata(original_payload_bytes: bytes, new_metadata: dict) -> bytes:
+    """
+    Cập nhật metadata trong payload đóng gói (ví dụ: ghim bound_hwid mới) mà không cần mã hóa lại toàn bộ bài giảng.
+    Tốc độ cực nhanh: dưới 0.001 giây!
+    """
+    clean_meta = dict(new_metadata)
+    clean_meta.pop("_needs_save_bound_hwid", None)
+
+    if original_payload_bytes.startswith(MAGIC_HEADER_AUTOLOCK) or original_payload_bytes.startswith(MAGIC_HEADER_AUTOLOCK_V1):
+        header_len = len(MAGIC_HEADER_AUTOLOCK)
+        magic = MAGIC_HEADER_AUTOLOCK
+    elif original_payload_bytes.startswith(MAGIC_HEADER_STATIC) or original_payload_bytes.startswith(MAGIC_HEADER_STATIC_V1):
+        header_len = len(MAGIC_HEADER_STATIC)
+        magic = MAGIC_HEADER_STATIC
+    else:
+        raise ValueError("Định dạng dữ liệu không hợp lệ")
+
+    old_meta_len = struct.unpack(">I", original_payload_bytes[header_len:header_len + 4])[0]
+    payload_tail = original_payload_bytes[header_len + 4 + old_meta_len :]
+
+    new_meta_json = json.dumps(clean_meta, ensure_ascii=False).encode("utf-8")
+    new_meta_len = len(new_meta_json)
+
+    out = bytearray()
+    out.extend(magic)
+    out.extend(struct.pack(">I", new_meta_len))
+    out.extend(new_meta_json)
+    out.extend(payload_tail)
+    return bytes(out)
+
+
+def check_cloud_activation(server_url: str, license_id: str, current_hwid: str, title: str = "") -> dict:
+    """
+    Kết nối đến Server / Google Apps Script để kích hoạt 1 lần duy nhất:
+    - Hỗ trợ Google Sheets Apps Script Web App (GET query parameters + 302 redirect).
+    - Hỗ trợ cả API Server tuỳ chỉnh (/api/verify_or_bind qua POST).
+    - Nếu license_id chưa ai dùng: Server ghim current_hwid -> Trả về SUCCESS.
+    - Nếu license_id đã được dùng bởi máy khác: Server trả về REJECTED.
+    - Nếu server không phản hồi / mất mạng: Trả về NETWORK_ERROR.
+    """
+    clean_url = server_url.strip()
+    if not clean_url:
+        return {"status": "NO_SERVER"}
+
+    # 1. Nếu là Google Apps Script hoặc URL query chuẩn
+    if "script.google.com" in clean_url or not clean_url.endswith("/api/verify_or_bind"):
+        params = {
+            "action": "activate",
+            "license_id": license_id.strip().upper(),
+            "hwid": current_hwid.strip().upper(),
+            "title": title.strip()
+        }
+        qs = urllib.parse.urlencode(params)
+        target_url = f"{clean_url}?{qs}" if "?" not in clean_url else f"{clean_url}&{qs}"
+
+        req = urllib.request.Request(
+            target_url,
+            headers={"User-Agent": "LockSlideSecurePlayer-Mac/3.0"}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = resp.read().decode("utf-8")
+                res = json.loads(data)
+                # Chuẩn hóa trạng thái về uppercase
+                st = res.get("status", "").upper()
+                res["status"] = st
+                return res
+        except urllib.error.HTTPError as he:
+            try:
+                err_data = json.loads(he.read().decode("utf-8"))
+                return {"status": "REJECTED", "message": err_data.get("message", "Bản quyền bị từ chối")}
+            except Exception:
+                pass
+            return {"status": "NETWORK_ERROR", "error": f"HTTP {he.code}"}
+        except Exception as ex:
+            # Nếu GET thất bại và có vẻ là server REST cục bộ, thử POST dự phòng
+            pass
+
+    # 2. Hỗ trợ API Server tuỳ chỉnh (POST JSON)
+    target_api = clean_url if clean_url.endswith("/api/verify_or_bind") else f"{clean_url.rstrip('/')}/api/verify_or_bind"
+    post_payload = {
+        "license_id": license_id.strip().upper(),
+        "hwid": current_hwid.strip().upper(),
+        "title": title.strip()
+    }
+    json_bytes = json.dumps(post_payload).encode("utf-8")
+    req = urllib.request.Request(
+        target_api,
+        data=json_bytes,
+        headers={"Content-Type": "application/json", "User-Agent": "LockSlideSecurePlayer-Mac/3.0"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = resp.read().decode("utf-8")
+            res = json.loads(data)
+            st = res.get("status", "").upper()
+            if st == "SUCCESS":
+                return {"status": "SUCCESS", "bound_hwid": res.get("bound_hwid", current_hwid), "message": res.get("message", "")}
+            else:
+                return {"status": "REJECTED", "bound_hwid": res.get("bound_hwid", ""), "message": res.get("message", "")}
+    except urllib.error.HTTPError as he:
+        try:
+            err_data = json.loads(he.read().decode("utf-8"))
+            return {"status": "REJECTED", "message": err_data.get("message", "Bản quyền bị từ chối")}
+        except Exception:
+            return {"status": "REJECTED", "message": f"Máy chủ từ chối bản quyền (HTTP {he.code})"}
+    except Exception as ex:
+        return {"status": "NETWORK_ERROR", "error": str(ex)}
+
+
 # ==============================================================================
-# 1. PHƯƠNG THỨC AUTO-LOCK (FIRST-RUN AUTO-LOCK) HỖ TRỢ CHỈNH SỬA
+# 1. PHƯƠNG THỨC AUTO-LOCK CHO MACBOOK (FIRST-RUN AUTO-LOCK / TOFU)
 # ==============================================================================
 
 def build_autolock_payload(
     presentation_bytes: bytes,
     license_id: str,
-    server_url: str,
+    server_url: str = "",
     title: str = "Bài giảng bảo mật",
     allow_edit: bool = True,
     block_save_as: bool = True,
     block_copy: bool = True,
     expiry_date: str = "",
     watermark_text: str = "",
+    bound_hwid: str = "",
+    offline_fallback: bool = True,
     target_os: str = "MACOS"
 ) -> bytes:
     """
-    Đóng gói bài giảng theo cơ chế Auto-Lock cho MacBook:
-    - Không cần biết trước mã máy của khách hàng.
-    - Tiêm chính sách Fluent UI Ribbon cấm Save As & Copy, làm sạch font gây lỗi trên Mac.
+    Đóng gói bài giảng theo cơ chế Auto-Lock KẾT HỢP (Hybrid) cho MacBook:
+    - Hỗ trợ Online qua Google Sheets / Cloud Server (nếu có kết nối Internet).
+    - Tự động khóa ngoại tuyến (Offline Auto-Lock) ngay trên máy Mac khách nếu không có mạng.
+    - Hoặc khóa cố định vào mã máy cụ thể nếu được cung cấp trước (bound_hwid).
     - Cho phép mở lên chỉnh sửa trực tiếp trên PowerPoint (nếu allow_edit=True).
-    - Đồng bộ lưu tự động khi nhấn Cmd+S hoặc lưu file.
+    - Bảo vệ chống trích xuất: Khóa Save As & Export (nếu block_save_as=True).
+    - Tối ưu cho macOS: Làm sạch font nhúng và cấu hình Ribbon tương thích PowerPoint for Mac.
     """
     if block_save_as or block_copy:
         processed_bytes = inject_ribbon_policy(
@@ -235,6 +377,8 @@ def build_autolock_payload(
         "block_copy": block_copy,
         "expiry_date": expiry_date,
         "watermark": watermark_text,
+        "bound_hwid": bound_hwid.strip().upper(),
+        "offline_fallback": offline_fallback,
         "target_os": target_os,
         "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "lic_salt": lic_salt.hex(),
@@ -262,19 +406,21 @@ def verify_and_decrypt_autolock(
 ) -> tuple[dict, bytes]:
     """
     Xác thực bản quyền & Giải mã bài giảng Auto-Lock trên MacBook:
-    1. Kiểm tra cache cục bộ (nếu đã kích hoạt thành công trên máy này trước đó).
-    2. Truy vấn máy chủ bản quyền /api/verify_or_bind:
-       - Nếu PENDING: Máy chủ tự động ghim HWID của máy Mac này.
-       - Nếu ACTIVATED và trùng HWID: Cho phép mở.
-       - Nếu ACTIVATED nhưng khác HWID: Ném lỗi từ chối, ngăn chặn chia sẻ file!
-       - Nếu REVOKED: Ném lỗi từ chối, chặn tức thì.
-    3. Cập nhật cache token cục bộ sau khi thành công.
-    4. Giải mã dữ liệu PowerPoint trực tiếp vào bộ nhớ RAM.
+    1. Kiểm tra cache cục bộ (nếu đã kích hoạt thành công trên máy Mac này trước đó).
+    2. Kiểm tra mã máy ghim cứng (bound_hwid): Nếu khác mã máy hiện tại -> Chặn tức thì!
+    3. Nếu chưa có mã ghim:
+       - Nếu có server_url: Xác thực qua Google Apps Script hoặc Server Cloud (1 lần duy nhất).
+       - Nếu không có server_url: Tự động khóa cố định vào máy Mac này lần đầu (Offline Auto-Lock TOFU).
+    4. Cập nhật cache token cục bộ sau khi thành công.
+    5. Giải mã dữ liệu PowerPoint trực tiếp vào bộ nhớ RAM.
     """
-    license_id = metadata["license_id"]
-    server_url = metadata["server_url"]
+    license_id = metadata["license_id"].strip().upper()
+    server_url = metadata.get("server_url", "").strip()
+    bound_hwid = metadata.get("bound_hwid", "").strip().upper()
+    clean_hwid = current_hwid.strip().upper()
     cache_file = get_local_cache_path(license_id)
 
+    # 1. Đọc kiểm tra cache nội bộ sẵn có trên thiết bị này
     has_valid_local_cache = False
     if os.path.exists(cache_file):
         try:
@@ -283,87 +429,80 @@ def verify_and_decrypt_autolock(
             cache_salt = cached_data[:16]
             cache_nonce = cached_data[16:28]
             cache_ciphertext = cached_data[28:]
-            hw_key = derive_key(current_hwid, cache_salt)
+            hw_key = derive_key(clean_hwid, cache_salt)
             aesgcm = AESGCM(hw_key)
             decrypted_cache = aesgcm.decrypt(cache_nonce, cache_ciphertext, None).decode("utf-8")
-            if decrypted_cache == f"ACTIVATED::{license_id}::{current_hwid}":
+            if decrypted_cache == f"ACTIVATED::{license_id}::{clean_hwid}":
                 has_valid_local_cache = True
         except Exception:
             has_valid_local_cache = False
 
-    # Chuẩn bị gửi yêu cầu tới License Server
-    req_data = {
-        "license_id": license_id,
-        "hwid": current_hwid,
-        "title": metadata.get("title", "")
-    }
+    # 2. KIỂM TRA MÃ MÁY ĐÃ GHIM TRONG FILE (NẾU ĐÃ TỪNG GHIM)
+    if bound_hwid and bound_hwid != clean_hwid:
+        raise PermissionError(
+            f"BẢN QUYỀN KHÔNG HỢP LỆ!\n\n"
+            f"Bài giảng này đã được khóa cố định vào một máy MacBook khác.\n"
+            f"Mã máy của thiết bị này: {clean_hwid}\n\n"
+            f"Mỗi file nén mã hóa chỉ được mở trên đúng 1 máy tính duy nhất.\n"
+            f"Chuyển sang máy khác sẽ không thể mở được!"
+        )
 
-    clean_url = server_url.rstrip("/")
-    if "script.google.com" in clean_url:
-        target_api = clean_url
-    else:
-        target_api = f"{clean_url}/api/verify_or_bind"
-
-    json_bytes = json.dumps(req_data).encode("utf-8")
-    req = urllib.request.Request(
-        target_api,
-        data=json_bytes,
-        headers={"Content-Type": "application/json", "User-Agent": "LockSlideSecurePlayer-Mac/2.5"},
-        method="POST"
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            resp_json = json.loads(resp.read().decode("utf-8"))
-
-        if resp_json.get("status") == "success":
-            # Ghi hoặc cập nhật cache token cục bộ
-            try:
-                cache_salt = os.urandom(16)
-                hw_key = derive_key(current_hwid, cache_salt)
-                cache_nonce = os.urandom(12)
-                aesgcm = AESGCM(hw_key)
-                token_str = f"ACTIVATED::{license_id}::{current_hwid}"
-                encrypted_token = aesgcm.encrypt(cache_nonce, token_str.encode("utf-8"), None)
-                with open(cache_file, "wb") as f:
-                    f.write(cache_salt + cache_nonce + encrypted_token)
-            except Exception:
-                pass
+    # 3. XÁC THỰC BẢN QUYỀN (ONLINE TRƯỚC, OFFLINE CACHE DỰ PHÒNG)
+    if server_url:
+        cloud_res = check_cloud_activation(
+            server_url=server_url,
+            license_id=license_id,
+            current_hwid=clean_hwid,
+            title=metadata.get("title", "")
+        )
+        c_status = cloud_res.get("status", "").upper()
+        if c_status == "SUCCESS":
+            metadata["bound_hwid"] = clean_hwid
+            metadata["_needs_save_bound_hwid"] = True
+            _write_activation_cache(cache_file, license_id, clean_hwid)
+        elif c_status == "REJECTED":
+            _clear_activation_cache(cache_file)
+            bound_other = cloud_res.get("bound_hwid", "MÁY KHÁCH KHÁC")
+            msg = cloud_res.get("message")
+            if not msg:
+                msg = (
+                    f"TRUY CẬP BỊ TỪ CHỐI!\n\n"
+                    f"Lượt mở của bài giảng này đã được sử dụng hết trên một máy MacBook khác.\n"
+                    f"Mã máy đã kích hoạt: {bound_other}\n"
+                    f"Mã máy hiện tại: {clean_hwid}\n\n"
+                    f"Mỗi bài giảng chỉ mở được đúng 1 lần trên 1 máy MacBook duy nhất.\n"
+                    f"Dù có chia sẻ file chưa giải nén thì máy khác cũng không thể mở được!"
+                )
+            raise PermissionError(msg)
         else:
-            # Máy chủ từ chối -> Xóa cache nếu có và chặn
-            if os.path.exists(cache_file):
-                try:
-                    os.remove(cache_file)
-                except Exception:
-                    pass
-            err_msg = resp_json.get("message", "Quyền truy cập bài giảng này đã bị thu hồi hoặc không hợp lệ.")
-            raise PermissionError(err_msg)
-
-    except urllib.error.HTTPError as he:
-        if os.path.exists(cache_file):
-            try:
-                os.remove(cache_file)
-            except Exception:
-                pass
-        try:
-            err_body = json.loads(he.read().decode("utf-8"))
-            err_msg = err_body.get("message", "Quyền truy cập bài giảng này đã bị thu hồi bởi tác giả.")
-        except Exception:
-            err_msg = f"Truy cập bị từ chối bởi máy chủ (Mã lỗi {he.code})."
-        raise PermissionError(err_msg)
-
-    except PermissionError:
-        raise
-
-    except Exception:
-        # Nếu offline hoặc lỗi mạng, kiểm tra xem có cache hợp lệ từ trước không
-        if not has_valid_local_cache:
+            # Lỗi mạng (offline): Nếu đã từng kích hoạt hợp lệ trước đó trên máy này -> cho mở tiếp
+            if has_valid_local_cache and (not bound_hwid or bound_hwid == clean_hwid):
+                if not bound_hwid:
+                    metadata["bound_hwid"] = clean_hwid
+            else:
+                raise PermissionError(
+                    f"YÊU CẦU KẾT NỐI INTERNET LẦN ĐẦU TIÊN!\n\n"
+                    f"Để kích hoạt lượt mở duy nhất của bài giảng này trên MacBook, máy tính cần có kết nối Internet trong 2 giây để xác thực bản quyền.\n\n"
+                    f"(Sau khi kích hoạt xong, bài giảng sẽ tự động lưu bản quyền và bạn có thể ngắt mạng để sử dụng Offline vĩnh viễn)."
+                )
+    else:
+        # Không có server_url -> Chế độ Offline Auto-Lock 100%
+        if not bound_hwid:
+            # Tự động ghim cứng vào máy Mac này lần đầu
+            metadata["bound_hwid"] = clean_hwid
+            metadata["_needs_save_bound_hwid"] = True
+            _write_activation_cache(cache_file, license_id, clean_hwid)
+        elif bound_hwid == clean_hwid:
+            if not has_valid_local_cache:
+                _write_activation_cache(cache_file, license_id, clean_hwid)
+        else:
             raise PermissionError(
-                "Lần đầu tiên mở bài giảng trên MacBook cần có kết nối Internet để tự động ghim vào máy tính của bạn.\n\n"
-                "Vui lòng kết nối Wi-Fi / Internet và mở lại bài giảng!"
+                f"BẢN QUYỀN KHÔNG HỢP LỆ!\n\n"
+                f"Bài giảng này đã được khóa cố định vào một máy MacBook khác.\n"
+                f"Mã máy của thiết bị này: {clean_hwid}"
             )
 
-    # Giải mã CEK
+    # 4. GIẢI MÃ NỘI DUNG BÀI GIẢNG VÀO BỘ NHỚ RAM
     lic_salt = bytes.fromhex(metadata["lic_salt"])
     lic_nonce = bytes.fromhex(metadata["lic_nonce"])
     enc_cek = bytes.fromhex(metadata["enc_cek"])
@@ -372,7 +511,6 @@ def verify_and_decrypt_autolock(
     aesgcm_lic = AESGCM(lic_key)
     cek = aesgcm_lic.decrypt(lic_nonce, enc_cek, None)
 
-    # Giải mã bài giảng vào RAM
     aesgcm_main = AESGCM(cek)
     presentation_bytes = aesgcm_main.decrypt(main_nonce, encrypted_data, None)
 
@@ -394,6 +532,7 @@ def build_static_payload(
     watermark_text: str = "",
     target_os: str = "MACOS"
 ) -> bytes:
+    """Đóng gói bài giảng theo danh sách mã máy Mac cụ thể (Static HWID)"""
     if block_save_as or block_copy:
         processed_bytes = inject_ribbon_policy(
             presentation_bytes,
@@ -410,21 +549,20 @@ def build_static_payload(
     aesgcm_main = AESGCM(cek)
     encrypted_data = aesgcm_main.encrypt(main_nonce, processed_bytes, None)
 
-    normalized_hwids = [h.strip().upper() for h in allowed_hwids if h.strip()]
-    if not normalized_hwids:
-        raise ValueError("Phải có ít nhất 1 mã máy HWID được cấp phép!")
-
-    client_slots = {}
-    for hw in normalized_hwids:
-        slot_salt = os.urandom(16)
-        hw_key = derive_key(hw, slot_salt)
+    slots = {}
+    for hwid in allowed_hwids:
+        clean_hwid = hwid.strip().upper()
+        if not clean_hwid:
+            continue
+        salt = os.urandom(16)
+        dev_key = derive_key(clean_hwid, salt)
         slot_nonce = os.urandom(12)
-        aesgcm_slot = AESGCM(hw_key)
-        encrypted_cek = aesgcm_slot.encrypt(slot_nonce, cek, None)
-        client_slots[hw] = {
-            "salt": slot_salt.hex(),
+        aesgcm_slot = AESGCM(dev_key)
+        enc_cek_slot = aesgcm_slot.encrypt(slot_nonce, cek, None)
+        slots[clean_hwid] = {
+            "salt": salt.hex(),
             "nonce": slot_nonce.hex(),
-            "enc_cek": encrypted_cek.hex()
+            "enc_cek": enc_cek_slot.hex()
         }
 
     metadata = {
@@ -436,8 +574,8 @@ def build_static_payload(
         "expiry_date": expiry_date,
         "watermark": watermark_text,
         "target_os": target_os,
-        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "slots": client_slots
+        "slots": slots,
+        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
     meta_json = json.dumps(metadata, ensure_ascii=False).encode("utf-8")
@@ -463,19 +601,18 @@ def verify_and_decrypt_static(
 
     if clean_hwid not in slots:
         raise PermissionError(
-            f"BẢN QUYỀN KHÔNG HỢP LỆ TRÊN MACBOOK NÀY!\n\n"
-            f"Mã máy Mac hiện tại: {clean_hwid}\n"
-            f"Bài giảng này đã được khóa bảo mật chỉ mở trên thiết bị được tác giả cấp phép.\n"
-            f"Vui lòng gửi mã máy trên cho tác giả để được kích hoạt."
+            f"THIẾT BỊ KHÔNG ĐƯỢC PHÉP TRUY CẬP!\n\n"
+            f"Mã máy Mac hiện tại: {clean_hwid}\n\n"
+            f"Thiết bị này không nằm trong danh sách được cấp phép xem bài giảng."
         )
 
     slot_info = slots[clean_hwid]
-    slot_salt = bytes.fromhex(slot_info["salt"])
+    salt = bytes.fromhex(slot_info["salt"])
     slot_nonce = bytes.fromhex(slot_info["nonce"])
     enc_cek = bytes.fromhex(slot_info["enc_cek"])
 
-    hw_key = derive_key(clean_hwid, slot_salt)
-    aesgcm_slot = AESGCM(hw_key)
+    dev_key = derive_key(clean_hwid, salt)
+    aesgcm_slot = AESGCM(dev_key)
     cek = aesgcm_slot.decrypt(slot_nonce, enc_cek, None)
 
     aesgcm_main = AESGCM(cek)
@@ -485,7 +622,7 @@ def verify_and_decrypt_static(
 
 
 # ==============================================================================
-# 3. ĐIỀU PHỐI GIẢI MÃ & TỰ ĐỘNG CẬP NHẬT CHỈNH SỬA (AUTO-SAVE SYNC)
+# 3. HÀM GIẢI MÃ & TỰ ĐỘNG CẬP NHẬT CHỈNH SỬA (AUTO-SAVE SYNC)
 # ==============================================================================
 
 def decrypt_presentation_from_bytes(data: bytes, current_hwid: str) -> tuple[dict, bytes]:
@@ -539,7 +676,7 @@ def decrypt_presentation(file_path: str, current_hwid: str) -> tuple[dict, bytes
 def reencrypt_updated_presentation(original_payload_bytes: bytes, updated_pptx_bytes: bytes) -> bytes:
     """
     Cập nhật lại bài giảng sau khi khách hàng MacBook đã chỉnh sửa và bấm lưu (Cmd+S / Save).
-    Tái tạo gói payload mã hóa AES-256 giữ nguyên License ID, Server URL và quyền hạn.
+    Tái tạo gói payload mã hóa AES-256 giữ nguyên License ID, Server URL, bound_hwid và quyền hạn.
     """
     if original_payload_bytes.startswith(MAGIC_HEADER_AUTOLOCK) or original_payload_bytes.startswith(MAGIC_HEADER_AUTOLOCK_V1):
         header_len = len(MAGIC_HEADER_AUTOLOCK)
@@ -573,13 +710,15 @@ def reencrypt_updated_presentation(original_payload_bytes: bytes, updated_pptx_b
         return build_autolock_payload(
             presentation_bytes=final_bytes,
             license_id=metadata["license_id"],
-            server_url=metadata["server_url"],
+            server_url=metadata.get("server_url", ""),
             title=metadata.get("title", ""),
             allow_edit=metadata.get("allow_edit", True),
             block_save_as=block_save_as,
             block_copy=block_copy,
             expiry_date=metadata.get("expiry_date", ""),
             watermark_text=metadata.get("watermark", ""),
+            bound_hwid=metadata.get("bound_hwid", ""),
+            offline_fallback=metadata.get("offline_fallback", True),
             target_os="MACOS"
         )
     else:

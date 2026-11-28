@@ -1,29 +1,37 @@
 """
-LockSlide Studio macOS v2.5 - Hệ Thống Mã Hóa & Quản Lý Bản Quyền Bài Giảng PowerPoint Cho MacBook
-Hỗ trợ mở bài giảng ở CHẾ ĐỘ CHỈNH SỬA (Editable Mode) & Tự Động Lưu (Auto-Save Sync)
-Thiết Kế Hiện Đại, Tech Neon Dark Theme, Animation Công Nghệ, Tối ưu 100% cho MacBook (macOS)
+LockSlide Studio macOS v3.0 - Hệ Thống Mã Hóa & Đóng Gói Bài Giảng PowerPoint Độc Lập Cho MacBook (.ZIP)
+Đặc điểm:
+- 100% Ngoại tuyến (Offline), không cần máy chủ, không cần mạng LAN hay Internet.
+- Hỗ trợ Google Sheets (Apps Script) làm máy chủ bản quyền đám mây miễn phí 100%.
+- Mỗi bài giảng được xuất thành 1 file nén (.zip) riêng biệt để gửi cho khách hàng MacBook.
+- Tự động ghim cứng vào ID máy Mac khách ngay lần mở đầu tiên (Auto-Lock TOFU).
+- Chuyển sang máy tính khác KHÔNG THỂ MỞ ĐƯỢC!
+- Khách hàng vẫn có thể chỉnh sửa và Lưu bài (Cmd+S) bình thường trong PowerPoint for Mac.
+- Cấm tuyệt đối chức năng Save As và Copy để bảo vệ 100% bản quyền tác giả.
 """
 
 import sys
 import os
+import json
+import webbrowser
 import random
 import datetime
-import sqlite3
-import threading
 import math
+import shutil
+import zipfile
+import tempfile
+import subprocess
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QDialog, QFrame,
     QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QProgressBar, QCheckBox, QComboBox, QMessageBox
+    QAbstractItemView, QProgressBar, QCheckBox, QMessageBox
 )
-from PyQt5.QtGui import QFont, QColor, QPainter, QBrush, QPen, QLinearGradient
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPropertyAnimation, QEasingCurve, pyqtProperty
 
 import crypto_engine_mac
-from license_server import app as flask_app, DB_FILE, start_server_in_background
-from ribbon_policy_mac import inject_ribbon_policy
 import mac_packager
 
 def get_app_dir():
@@ -41,41 +49,7 @@ def generate_license_code() -> str:
 
 
 # ==============================================================================
-# WIDGET ANIMATION CÔNG NGHỆ: PULSING STATUS RADAR DOT
-# ==============================================================================
-class PulsingStatusDot(QWidget):
-    """Điểm tròn phát sáng nhịp thở (Breathing/Pulse) theo phong cách Radar Công Nghệ"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedSize(14, 14)
-        self._glow_alpha = 180
-        self._step = 0
-        
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._animate_pulse)
-        self.timer.start(40)
-
-    def _animate_pulse(self):
-        self._step += 0.08
-        self._glow_alpha = int(170 + 85 * math.sin(self._step))
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-
-        halo_color = QColor(16, 185, 129, int(self._glow_alpha * 0.45))
-        painter.setBrush(QBrush(halo_color))
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(1, 1, 12, 12)
-
-        core_color = QColor(52, 211, 153, min(255, self._glow_alpha + 30))
-        painter.setBrush(QBrush(core_color))
-        painter.drawEllipse(3, 3, 8, 8)
-
-
-# ==============================================================================
-# WIDGET ANIMATION CÔNG NGHỆ: KHUNG KÉO THẢ HIỆU ỨNG GLOW
+# WIDGET ANIMATION: KHUNG KÉO THẢ FILE CÔNG NGHỆ
 # ==============================================================================
 class TechDropZone(QFrame):
     files_dropped = pyqtSignal(list)
@@ -91,60 +65,64 @@ class TechDropZone(QFrame):
 
     @pyqtProperty(float)
     def glowProgress(self):
-        return getattr(self, '_glow_progress', 0.0)
+        return self._glow_progress
 
     @glowProgress.setter
     def glowProgress(self, val):
-        self._glow_progress = float(val)
-        r = int(51 + (6 - 51) * val)
-        g = int(65 + (182 - 65) * val)
-        b = int(85 + (212 - 85) * val)
-        bg_alpha = int(10 + 25 * val)
+        self._glow_progress = val
+        self.update_style()
+
+    def update_style(self):
+        alpha = int(40 + 80 * self._glow_progress)
+        border_col = f"rgba(56, 189, 248, {0.3 + 0.7 * self._glow_progress})"
+        bg_col = f"rgba(14, 21, 36, {0.6 + 0.4 * self._glow_progress})"
         self.setStyleSheet(f"""
             TechDropZone {{
-                background-color: rgba(6, 182, 212, {bg_alpha / 255.0:.3f});
-                border: 2px dashed rgb({r}, {g}, {b});
+                border: 2px dashed {border_col};
                 border-radius: 12px;
+                background-color: {bg_col};
             }}
         """)
 
     def init_ui(self):
-        self.glowProgress = 0.0
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setAlignment(Qt.AlignCenter)
+        self.setFixedHeight(120)
+        self.update_style()
+        l = QVBoxLayout(self)
+        l.setAlignment(Qt.AlignCenter)
+        l.setSpacing(6)
 
-        self.lbl_main = QLabel(" KÉO THẢ HOẶC CHỌN FILE POWERPOINT CHO MACBOOK TẠI ĐÂY")
-        self.lbl_main.setStyleSheet("font-size: 13px; font-weight: bold; color: #E2E8F0; letter-spacing: 1px;")
-        self.lbl_main.setAlignment(Qt.AlignCenter)
+        icon_lbl = QLabel("📂")
+        icon_lbl.setStyleSheet("font-size: 26px; background: transparent; border: none;")
+        icon_lbl.setAlignment(Qt.AlignCenter)
 
-        self.lbl_sub = QLabel("Mã hóa hàng loạt .pptx / .ppt — Xuất trọn gói Mo_[Tên].command chạy ngay trên macOS — Hỗ trợ Chỉnh sửa & Tự động lưu")
-        self.lbl_sub.setStyleSheet("font-size: 11px; color: #67E8F9; margin-top: 4px;")
-        self.lbl_sub.setAlignment(Qt.AlignCenter)
+        title_lbl = QLabel("KÉO THẢ CÁC FILE POWERPOINT (.PPTX, .PPTM) VÀO ĐÂY")
+        title_lbl.setStyleSheet("font-size: 13px; font-weight: 800; color: #38BDF8; letter-spacing: 0.8px; background: transparent; border: none;")
+        title_lbl.setAlignment(Qt.AlignCenter)
 
-        layout.addWidget(self.lbl_main)
-        layout.addWidget(self.lbl_sub)
+        sub_lbl = QLabel("Hỗ trợ chọn cùng lúc nhiều file — Tự động đóng gói độc lập (.ZIP) cho MacBook")
+        sub_lbl.setStyleSheet("font-size: 11px; color: #64748B; background: transparent; border: none;")
+        sub_lbl.setAlignment(Qt.AlignCenter)
+
+        l.addWidget(icon_lbl)
+        l.addWidget(title_lbl)
+        l.addWidget(sub_lbl)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
             self.anim.stop()
-            self.anim.setStartValue(self._glow_progress)
             self.anim.setEndValue(1.0)
             self.anim.start()
 
     def dragLeaveEvent(self, event):
         self.anim.stop()
-        self.anim.setStartValue(self._glow_progress)
         self.anim.setEndValue(0.0)
         self.anim.start()
 
     def dropEvent(self, event):
         self.anim.stop()
-        self.anim.setStartValue(self._glow_progress)
         self.anim.setEndValue(0.0)
         self.anim.start()
-
         file_paths = []
         for url in event.mimeData().urls():
             fp = url.toLocalFile()
@@ -155,151 +133,182 @@ class TechDropZone(QFrame):
 
 
 # ==============================================================================
-# THANH TIẾN TRÌNH SMOOTH PROGRESS BAR
+# WIDGET ANIMATION: THANH TIẾN TRÌNH MƯỢT MÀ
 # ==============================================================================
 class SmoothProgressBar(QProgressBar):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._anim_val = 0.0
+        self._animated_val = 0.0
         self.anim = QPropertyAnimation(self, b"animatedValue")
-        self.anim.setDuration(400)
+        self.anim.setDuration(300)
         self.anim.setEasingCurve(QEasingCurve.OutQuad)
 
     @pyqtProperty(float)
     def animatedValue(self):
-        return self._anim_val
+        return self._animated_val
 
     @animatedValue.setter
     def animatedValue(self, val):
-        self._anim_val = val
+        self._animated_val = val
         super().setValue(int(val))
 
     def setValueSmooth(self, target_val):
         self.anim.stop()
-        self.anim.setStartValue(float(self.value()))
+        self.anim.setStartValue(self._animated_val)
         self.anim.setEndValue(float(target_val))
         self.anim.start()
 
 
 # ==============================================================================
-# HỘP THOẠI MODAL CÔNG NGHỆ
+# HỘP THOẠI THÔNG BÁO HOÀN TẤT CÔNG NGHỆ
 # ==============================================================================
 class TechNotificationDialog(QDialog):
     def __init__(self, title_text: str, content_text: str, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(title_text)
+        self.setWindowTitle("Thông Báo Hệ Thống")
         self.setFixedSize(540, 360)
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-
-        card = QFrame(self)
-        card.setStyleSheet("""
-            QFrame {
-                background-color: #0E1524;
-                border: 1px solid #1E293B;
-                border-radius: 12px;
-            }
-        """)
-        card_l = QVBoxLayout(card)
-        card_l.setContentsMargins(28, 24, 28, 24)
-        card_l.setSpacing(16)
-
-        lbl_t = QLabel(title_text)
-        lbl_t.setStyleSheet("font-size: 16px; font-weight: 800; color: #38BDF8; letter-spacing: 1px;")
-        lbl_t.setAlignment(Qt.AlignCenter)
-        card_l.addWidget(lbl_t)
-
-        lbl_c = QLabel(content_text)
-        lbl_c.setWordWrap(True)
-        lbl_c.setStyleSheet("font-size: 12px; color: #E2E8F0; line-height: 1.5;")
-        card_l.addWidget(lbl_c)
-
-        card_l.addStretch()
-
-        btn_ok = QPushButton("Xác nhận / Đóng")
-        btn_ok.setCursor(Qt.PointingHandCursor)
-        btn_ok.setStyleSheet("""
+        self.setStyleSheet("""
+            QDialog { background-color: #0E1524; color: #E2E8F0; }
+            QLabel { color: #E2E8F0; font-size: 12px; }
             QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #06B6D4);
-                color: #FFFFFF; font-weight: bold; padding: 10px; border-radius: 8px; border: none; font-size: 12px;
+                background-color: #1E293B; color: #E2E8F0; font-size: 12px; font-weight: 600;
+                border: 1px solid #334155; border-radius: 8px; padding: 8px 16px;
             }
-            QPushButton:hover { background: #0369A1; }
+            QPushButton:hover { background-color: #2D3B52; color: #FFFFFF; }
         """)
-        btn_ok.clicked.connect(self.accept)
-        card_l.addWidget(btn_ok)
+        l = QVBoxLayout(self)
+        l.setContentsMargins(24, 20, 24, 20)
+        l.setSpacing(14)
 
-        layout.addWidget(card)
+        t_lbl = QLabel(title_text)
+        t_lbl.setStyleSheet("font-size: 15px; font-weight: 800; color: #38BDF8; letter-spacing: 0.5px;")
+        t_lbl.setAlignment(Qt.AlignCenter)
+        l.addWidget(t_lbl)
 
-
-class TechConfirmDialog(QDialog):
-    def __init__(self, title_text: str, content_text: str, confirm_btn_text: str = "Xác nhận", parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title_text)
-        self.setFixedSize(520, 320)
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-
-        card = QFrame(self)
-        card.setStyleSheet("background-color: #0E1524; border: 1px solid #1E293B; border-radius: 12px;")
-        card_l = QVBoxLayout(card)
-        card_l.setContentsMargins(26, 22, 26, 22)
-        card_l.setSpacing(14)
-
-        lbl_t = QLabel(title_text)
-        lbl_t.setStyleSheet("font-size: 15px; font-weight: 800; color: #F87171; letter-spacing: 0.8px;")
-        lbl_t.setAlignment(Qt.AlignCenter)
-        card_l.addWidget(lbl_t)
-
-        lbl_c = QLabel(content_text)
-        lbl_c.setWordWrap(True)
-        lbl_c.setStyleSheet("font-size: 12px; color: #CBD5E1; line-height: 1.4;")
-        card_l.addWidget(lbl_c)
-
-        card_l.addStretch()
+        card = QFrame()
+        card.setStyleSheet("background-color: #111827; border: 1px solid #1E293B; border-radius: 10px; padding: 12px;")
+        cl = QVBoxLayout(card)
+        c_lbl = QLabel(content_text)
+        c_lbl.setWordWrap(True)
+        c_lbl.setStyleSheet("font-size: 12px; line-height: 1.5; color: #CBD5E1;")
+        cl.addWidget(c_lbl)
+        l.addWidget(card)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-
-        btn_cancel = QPushButton("Hủy bỏ")
-        btn_cancel.setCursor(Qt.PointingHandCursor)
-        btn_cancel.setStyleSheet("background-color: #1E293B; color: #94A3B8; border: 1px solid #334155; padding: 9px; border-radius: 8px;")
-        btn_cancel.clicked.connect(self.reject)
-
-        btn_conf = QPushButton(confirm_btn_text)
-        btn_conf.setCursor(Qt.PointingHandCursor)
-        btn_conf.setStyleSheet("background-color: #DC2626; color: white; font-weight: bold; border: none; padding: 9px; border-radius: 8px;")
-        btn_conf.clicked.connect(self.accept)
-
-        btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(btn_conf)
-        card_l.addLayout(btn_row)
-
-        layout.addWidget(card)
+        btn_close = QPushButton("Xác Nhận & Đóng")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.setStyleSheet("background-color: #0284C7; color: white; font-weight: 700; border: none; padding: 10px 20px;")
+        btn_close.clicked.connect(self.accept)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        btn_row.addStretch()
+        l.addLayout(btn_row)
 
 
 # ==============================================================================
-# WORKER LUỒNG MÃ HÓA HÀNG LOẠT CHO MAC (BATCH ENCODE THREAD)
+# HỘP THOẠI HƯỚNG DẪN CÀI ĐẶT GOOGLE SHEETS
+# ==============================================================================
+class GoogleSheetsGuideDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Hướng Dẫn Tạo Máy Chủ Google Sheets Cho MacBook")
+        self.setFixedSize(620, 500)
+        self.setStyleSheet("""
+            QDialog { background-color: #0E1524; color: #E2E8F0; }
+            QLabel { color: #E2E8F0; font-size: 12px; }
+            QPushButton {
+                background-color: #1E293B; color: #E2E8F0; font-size: 12px; font-weight: 600;
+                border: 1px solid #334155; border-radius: 8px; padding: 8px 16px;
+            }
+            QPushButton:hover { background-color: #2D3B52; color: #FFFFFF; }
+        """)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(14)
+
+        lbl_title = QLabel("HƯỚNG DẪN DÙNG GOOGLE SHEETS LÀM MÁY CHỦ BẢN QUYỀN")
+        lbl_title.setStyleSheet("font-size: 15px; font-weight: 800; color: #38BDF8; letter-spacing: 0.5px;")
+        lbl_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(lbl_title)
+
+        guide_text = (
+            "<p style='color: #34D399; font-weight: bold;'>🌟 Lợi ích khi dùng Google Sheets (Khuyên dùng):</p>"
+            "• Hoàn toàn <b>MIỄN PHÍ 100%</b>, không cần mua máy chủ hay VPS.<br>"
+            "• Đảm bảo mỗi bài giảng <b>chỉ mở được đúng 1 lần duy nhất</b> trên 1 máy MacBook.<br>"
+            "• Khách hàng có chia sẻ file zip chưa giải nén cho người khác thì người khác <b>bị chặn 100%</b>!<br>"
+            "• Khách mở lần đầu chỉ cần 1-2 giây có mạng để xác thực, sau đó ngắt mạng dùng Offline vĩnh viễn.<br><br>"
+            "<p style='color: #FACC15; font-weight: bold;'>📋 Các bước thiết lập nhanh (Chỉ mất 1 phút):</p>"
+            "<b>Bước 1:</b> Nhấn nút <b>'🌐 Mở Google Sheets (sheets.new)'</b> bên dưới để tạo 1 bảng tính mới.<br>"
+            "<b>Bước 2:</b> Trên thanh menu, chọn <b>Tiện ích mở rộng (Extensions)</b> -> <b>Apps Script</b>.<br>"
+            "<b>Bước 3:</b> Nhấn nút <b>'📋 Sao Chép Mã Apps Script'</b> bên dưới, xóa code cũ và dán vào Apps Script.<br>"
+            "<b>Bước 4:</b> Nhấn nút <b>Triển khai (Deploy)</b> ở góc trên bên phải -> <b>Tùy chọn triển khai mới (New deployment)</b>:<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;• Loại: Chọn <b>Ứng dụng web (Web app)</b>.<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;• Thực thi dưới dạng: <b>Tôi (Me)</b>.<br>"
+            "&nbsp;&nbsp;&nbsp;&nbsp;• Ai có quyền truy cập: <b>Bất kỳ ai (Anyone)</b>.<br>"
+            "<b>Bước 5:</b> Copy link Web App (dạng <code>https://script.google.com/macros/s/.../exec</code>) dán vào ô <b>MÁY CHỦ BẢN QUYỀN (URL)</b>."
+        )
+        lbl_guide = QLabel(guide_text)
+        lbl_guide.setTextFormat(Qt.RichText)
+        lbl_guide.setWordWrap(True)
+        lbl_guide.setStyleSheet("line-height: 1.4;")
+        layout.addWidget(lbl_guide)
+
+        btn_row = QHBoxLayout()
+        btn_open_sheets = QPushButton("🌐 Mở Google Sheets (sheets.new)")
+        btn_open_sheets.setCursor(Qt.PointingHandCursor)
+        btn_open_sheets.setStyleSheet("background-color: #0369A1; color: white; font-weight: bold; padding: 10px 16px;")
+        btn_open_sheets.clicked.connect(lambda: webbrowser.open("https://sheets.new"))
+
+        btn_copy_code = QPushButton("📋 Sao Chép Toàn Bộ Mã Apps Script")
+        btn_copy_code.setCursor(Qt.PointingHandCursor)
+        btn_copy_code.setStyleSheet("background-color: #059669; color: white; font-weight: bold; padding: 10px 16px;")
+        btn_copy_code.clicked.connect(self.copy_script_code)
+
+        btn_row.addWidget(btn_open_sheets)
+        btn_row.addWidget(btn_copy_code)
+        layout.addLayout(btn_row)
+
+        btn_close = QPushButton("Đóng Hướng Dẫn")
+        btn_close.setCursor(Qt.PointingHandCursor)
+        btn_close.clicked.connect(self.accept)
+        layout.addWidget(btn_close)
+
+    def copy_script_code(self):
+        js_file = os.path.join(get_app_dir(), "google_apps_script_server.js")
+        code = ""
+        if os.path.exists(js_file):
+            try:
+                with open(js_file, "r", encoding="utf-8") as f:
+                    code = f.read()
+            except Exception:
+                pass
+        if not code:
+            code = "// Vui lòng mở file google_apps_script_server.js trong thư mục để sao chép."
+        clipboard = QApplication.clipboard()
+        clipboard.setText(code)
+        QMessageBox.information(
+            self, "Đã sao chép",
+            "Đã sao chép toàn bộ mã JavaScript vào bộ nhớ tạm!\nBây giờ bạn chỉ cần dán (Cmd+V / Ctrl+V) vào Google Apps Script."
+        )
+
+
+# ==============================================================================
+# WORKER LUỒNG MÃ HÓA & ĐÓNG GÓI ZIP CHO MACBOOK
 # ==============================================================================
 class BatchEncodeWorkerMac(QThread):
     row_status_signal = pyqtSignal(int, str, str)  # row, text, color_hex
     overall_progress_signal = pyqtSignal(int, int, str)  # current, total, text
     finished_signal = pyqtSignal(int, int)  # success, failed
 
-    def __init__(self, file_items, server_url, result_dir, allow_edit=True, block_save_as=True, block_copy=True, create_zip=True):
+    def __init__(self, file_items, result_dir, allow_edit=True, block_save_as=True, block_copy=True, bound_hwid="", server_url=""):
         super().__init__()
         self.file_items = file_items
-        self.server_url = server_url
         self.result_dir = result_dir
         self.allow_edit = allow_edit
         self.block_save_as = block_save_as
         self.block_copy = block_copy
-        self.create_zip = create_zip
+        self.bound_hwid = bound_hwid
+        self.server_url = server_url
 
     def run(self):
         total = len(self.file_items)
@@ -315,17 +324,20 @@ class BatchEncodeWorkerMac(QThread):
             if not clean_name:
                 clean_name = f"BaiGiang_Mac_{idx+1}"
 
-            folder_name = clean_name
-            file_out_dir = os.path.join(self.result_dir, folder_name)
-            os.makedirs(file_out_dir, exist_ok=True)
-
-            self.row_status_signal.emit(idx, "Đang đọc dữ liệu...", "#FACC15")
+            self.row_status_signal.emit(idx, "Đang xử lý...", "#FACC15")
             self.overall_progress_signal.emit(idx + 1, total, f"Đang mã hóa ({idx + 1}/{total}): {os.path.basename(file_path)}")
 
+            # Tạo thư mục tạm để chuẩn bị các file trước khi nén zip
+            temp_staging_dir = tempfile.mkdtemp(prefix="lockslide_mac_pkg_")
+            pkg_folder = os.path.join(temp_staging_dir, clean_name)
+            os.makedirs(pkg_folder, exist_ok=True)
+
             try:
+                # 1. Đọc byte PowerPoint bản gốc
                 with open(file_path, "rb") as f_in:
                     pres_bytes = f_in.read()
 
+                # 2. Xây dựng payload bảo mật Auto-Lock cho MacBook
                 self.row_status_signal.emit(idx, "Đang mã hóa AES-256...", "#38BDF8")
                 payload = crypto_engine_mac.build_autolock_payload(
                     presentation_bytes=pres_bytes,
@@ -337,35 +349,54 @@ class BatchEncodeWorkerMac(QThread):
                     block_copy=self.block_copy,
                     expiry_date="",
                     watermark_text="",
+                    bound_hwid=self.bound_hwid,
+                    offline_fallback=True,
                     target_os="MACOS"
                 )
 
-                # Ghi vào SQLite Server DB
-                now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                try:
-                    with sqlite3.connect(DB_FILE) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO licenses (license_id, title, status, created_at)
-                            VALUES (?, ?, 'PENDING', ?)
-                        """, (lic_id, title, now))
-                        conn.commit()
-                except Exception:
-                    pass
-
-                # Đóng gói cho MacBook
+                # 3. Đóng gói trọn bộ macOS (file mã hóa, Mo_...command, script runtime, readme)
                 self.row_status_signal.emit(idx, "Đang đóng gói macOS...", "#818CF8")
                 mac_packager.package_for_mac(
-                    output_dir=file_out_dir,
-                    base_name=folder_name,
+                    output_dir=pkg_folder,
+                    base_name=clean_name,
                     payload_bytes=payload,
                     app_root_dir=APP_DIR,
-                    create_zip=self.create_zip
+                    create_zip=False
                 )
 
-                self.row_status_signal.emit(idx, "Hoàn tất (Sửa & Lưu Mac)", "#34D399")
+                # 4. Nén toàn bộ vào file .zip duy nhất với Unix attributes (0755 cho .command)
+                final_zip = os.path.join(self.result_dir, f"{clean_name}.zip")
+                if os.path.exists(final_zip) and idx > 0 and any(it["path"] != file_path for it in self.file_items[:idx]):
+                    final_zip = os.path.join(self.result_dir, f"{clean_name}_{idx+1}.zip")
+
+                self.row_status_signal.emit(idx, "Đang nén tập tin .zip...", "#06B6D4")
+                with zipfile.ZipFile(final_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    folder_prefix = f"{clean_name}/"
+                    z_dir = zipfile.ZipInfo(folder_prefix)
+                    z_dir.create_system = 3  # Unix
+                    z_dir.external_attr = (0o40755) << 16
+                    zf.writestr(z_dir, "")
+
+                    for root_d, _, files in os.walk(pkg_folder):
+                        for f_name in files:
+                            abs_f = os.path.join(root_d, f_name)
+                            rel_arc = folder_prefix + os.path.relpath(abs_f, pkg_folder).replace("\\", "/")
+                            z_info = zipfile.ZipInfo.from_file(abs_f, rel_arc)
+                            z_info.create_system = 3
+                            if f_name.endswith((".command", ".sh")):
+                                z_info.external_attr = (0o100755) << 16  # chmod +x
+                            else:
+                                z_info.external_attr = (0o100644) << 16
+                            with open(abs_f, "rb") as fp:
+                                zf.writestr(z_info, fp.read())
+
+                # Xóa thư mục tạm
+                shutil.rmtree(temp_staging_dir, ignore_errors=True)
+
+                self.row_status_signal.emit(idx, "Hoàn tất (.ZIP)", "#34D399")
                 success += 1
             except Exception as e:
+                shutil.rmtree(temp_staging_dir, ignore_errors=True)
                 err_msg = str(e).split("\n")[0]
                 self.row_status_signal.emit(idx, f"Lỗi: {err_msg[:24]}", "#F87171")
                 failed += 1
@@ -374,437 +405,262 @@ class BatchEncodeWorkerMac(QThread):
 
 
 # ==============================================================================
-# CỬA SỔ CHÍNH: LOCKSLIDE STUDIO MACOS APP
+# CỬA SỔ CHÍNH: GIAO DIỆN TINH GỌN, CHUYÊN NGHIỆP CHO MACBOOK
 # ==============================================================================
 class LockSlideStudioMacApp(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.app_dir = APP_DIR
+        self.app_dir = get_app_dir()
+        self.base_dir = self.app_dir
+
         self.setAcceptDrops(True)
         self.queued_files = []
 
-        # Khởi động máy chủ bản quyền chạy ngầm
-        self.start_background_server()
         self.init_ui()
-
-        # Timer cập nhật bảng giám sát bản quyền LIVE mỗi 3 giây
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.load_client_records)
-        self.timer.start(3000)
-
-    def start_background_server(self):
-        start_server_in_background(host="0.0.0.0", port=5000)
+        self.load_config()
 
     def init_ui(self):
-        self.setWindowTitle("LockSlide Studio macOS // PPT Security Suite (Editable & Auto-Save)")
-        self.setFixedSize(1080, 920)
+        self.setWindowTitle("LockSlide Studio macOS - Hệ Thống Mã Hóa & Đóng Gói Bài Giảng PowerPoint (.ZIP)")
+        self.resize(800, 600)
+        self.setMinimumSize(740, 520)
+
+        # Tech Dark Neon Stylesheet
         self.setStyleSheet("""
-            QMainWindow { background-color: #0A0E17; }
-            QLabel { color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+            QMainWindow { background-color: #080C14; }
+            QWidget { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Tahoma, sans-serif; color: #E2E8F0; }
+            QLabel { color: #E2E8F0; font-size: 12px; }
             QLineEdit {
-                background-color: #111827; color: #F8FAFC; border: 1px solid #1E293B;
-                border-radius: 8px; padding: 7px 12px; font-size: 12px;
+                background-color: #0E1524; color: #38BDF8; border: 1px solid #1E293B;
+                border-radius: 8px; padding: 8px 12px; font-size: 12px;
             }
-            QLineEdit:focus { border: 1px solid #06B6D4; background-color: #131F33; }
-            QPushButton {
-                background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155;
-                border-radius: 8px; padding: 8px 16px; font-size: 12px; font-weight: 600;
-            }
-            QPushButton:hover { background-color: #334155; border: 1px solid #475569; }
-            QPushButton:pressed { background-color: #0F172A; }
+            QLineEdit:focus { border: 1px solid #0284C7; }
             QTableWidget {
-                background-color: #0D131F; color: #F8FAFC; gridline-color: #1A2333;
-                border: 1px solid #1E293B; border-radius: 10px; font-size: 12px;
+                background-color: #0E1524; border: 1px solid #1E293B; border-radius: 10px;
+                gridline-color: #1A2234; selection-background-color: #1E293B;
+                selection-color: #38BDF8; font-size: 11px;
             }
             QHeaderView::section {
-                background-color: #090E17; color: #06B6D4; font-weight: 700;
-                font-size: 11px; letter-spacing: 0.8px; padding: 8px 10px;
-                border: none; border-bottom: 1px solid #1E293B;
+                background-color: #111827; color: #64748B; font-weight: 700;
+                font-size: 10px; border: none; padding: 6px; letter-spacing: 0.5px;
             }
-            QTableCornerButton::section { background-color: #090E17; border: none; }
-            QTableWidget::item:selected { background-color: #1E293B; }
-            QScrollBar:vertical { background: #0A0E17; width: 8px; border-radius: 4px; }
-            QScrollBar::handle:vertical { background: #1E293B; border-radius: 4px; min-height: 20px; }
-            QScrollBar::handle:vertical:hover { background: #334155; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
-            QCheckBox { color: #E2E8F0; font-size: 12px; font-weight: 600; spacing: 8px; }
-            QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #334155; background: #111827; }
-            QCheckBox::indicator:checked { background: #0284C7; border-color: #00F0FF; }
+            QPushButton {
+                background-color: #1E293B; color: #E2E8F0; font-size: 12px; font-weight: 600;
+                border: 1px solid #334155; border-radius: 8px; padding: 8px 16px;
+            }
+            QPushButton:hover { background-color: #2D3B52; color: #FFFFFF; }
+            QCheckBox { font-size: 12px; color: #CBD5E1; spacing: 6px; }
+            QCheckBox::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid #334155; background-color: #0E1524; }
+            QCheckBox::indicator:checked { background-color: #0284C7; border-color: #38BDF8; }
         """)
 
-        central = QWidget(self)
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(24, 18, 24, 18)
+        central_widget = QWidget(self)
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(20, 16, 20, 16)
         main_layout.setSpacing(12)
 
         # ----------------------------------------------------------------------
-        # 1. HEADER BAR: LOGO & STATUS RADAR
+        # 1. TIÊU ĐỀ CHÍNH
         # ----------------------------------------------------------------------
         header_bar = QHBoxLayout()
-
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        lbl_app = QLabel(" LOCKSLIDE STUDIO MAC // HỆ THỐNG MÃ HÓA BÀI GIẢNG (MACBOOK)")
-        lbl_app.setStyleSheet("font-size: 18px; font-weight: 800; color: #38BDF8; letter-spacing: 1.2px;")
 
-        lbl_sub = QLabel("Bảo mật PowerPoint trên macOS — Tự động ghim Apple HWID lần đầu (TOFU) — Cho phép Sửa & Lưu bài bình thường")
+        lbl_app = QLabel(" LOCKSLIDE // MÃ HÓA & ĐÓNG GÓI BÀI GIẢNG CHO MACBOOK")
+        lbl_app.setStyleSheet("font-size: 17px; font-weight: 900; color: #38BDF8; letter-spacing: 1.2px;")
+
+        lbl_sub = QLabel("Tự động ghim cứng vào ID máy Mac khi mở lần đầu — Chống chia sẻ — Xuất file nén .ZIP độc lập")
         lbl_sub.setStyleSheet("font-size: 11px; color: #64748B; font-weight: 400;")
         title_box.addWidget(lbl_app)
         title_box.addWidget(lbl_sub)
         header_bar.addLayout(title_box)
-
         header_bar.addStretch()
 
-        status_box = QHBoxLayout()
-        status_box.setSpacing(8)
-        self.radar_dot = PulsingStatusDot()
-        self.lbl_server_status = QLabel("SERVER ONLINE (PORT 5000)")
-        self.lbl_server_status.setStyleSheet("font-size: 11px; font-weight: 700; color: #34D399; letter-spacing: 0.8px;")
-        status_box.addWidget(self.radar_dot)
-        status_box.addWidget(self.lbl_server_status)
-        header_bar.addLayout(status_box)
-
+        badge = QLabel("100% OFFLINE AUTO-LOCK")
+        badge.setStyleSheet("background-color: rgba(16, 185, 129, 0.15); color: #34D399; font-weight: 800; font-size: 11px; border: 1px solid #059669; border-radius: 12px; padding: 4px 12px;")
+        header_bar.addWidget(badge)
         main_layout.addLayout(header_bar)
 
         # ----------------------------------------------------------------------
-        # 2. KHUNG KÉO THẢ & NÚT CHỌN FILE
+        # 2. KHUNG KÉO THẢ & DANH SÁCH FILE
         # ----------------------------------------------------------------------
+        card_queue = QFrame()
+        card_queue.setStyleSheet("background-color: #0E1524; border: 1px solid #1E293B; border-radius: 14px;")
+        l_queue = QVBoxLayout(card_queue)
+        l_queue.setContentsMargins(16, 14, 16, 14)
+        l_queue.setSpacing(10)
+
         self.drop_zone = TechDropZone()
         self.drop_zone.files_dropped.connect(self.add_files_to_queue)
-        self.drop_zone.setFixedHeight(85)
-        main_layout.addWidget(self.drop_zone)
+        l_queue.addWidget(self.drop_zone)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
+        queue_actions = QHBoxLayout()
+        queue_actions.setSpacing(8)
 
-        self.btn_select_files = QPushButton("Chọn File PowerPoint...")
-        self.btn_select_files.setCursor(Qt.PointingHandCursor)
-        self.btn_select_files.clicked.connect(self.open_file_dialog)
+        btn_browse = QPushButton("Chọn File PowerPoint...")
+        btn_browse.setCursor(Qt.PointingHandCursor)
+        btn_browse.setStyleSheet("background-color: #0284C7; color: #FFFFFF; font-weight: 700; border: none;")
+        btn_browse.clicked.connect(self.browse_multiple_files)
 
-        self.btn_clear_queue = QPushButton("Xóa Danh Sách Chờ")
-        self.btn_clear_queue.setCursor(Qt.PointingHandCursor)
-        self.btn_clear_queue.clicked.connect(self.clear_queue)
+        btn_remove = QPushButton("Xóa file đã chọn")
+        btn_remove.clicked.connect(self.remove_selected_file)
 
-        btn_row.addWidget(self.btn_select_files)
-        btn_row.addWidget(self.btn_clear_queue)
-        btn_row.addStretch()
+        btn_clear = QPushButton("Xóa tất cả danh sách")
+        btn_clear.clicked.connect(self.clear_all_files)
 
-        # Input Server URL
-        lbl_srv = QLabel("Địa chỉ Server:")
-        lbl_srv.setStyleSheet("color: #94A3B8; font-size: 11px; font-weight: bold;")
-        self.txt_server_url = QLineEdit("http://127.0.0.1:5000")
-        self.txt_server_url.setFixedWidth(220)
-        btn_row.addWidget(lbl_srv)
-        btn_row.addWidget(self.txt_server_url)
+        self.lbl_queue_count = QLabel("0 FILE ĐÃ SẴN SÀNG")
+        self.lbl_queue_count.setStyleSheet("font-size: 11px; font-weight: 700; color: #06B6D4; margin-left: 10px;")
 
-        main_layout.addLayout(btn_row)
+        queue_actions.addWidget(btn_browse)
+        queue_actions.addWidget(btn_remove)
+        queue_actions.addWidget(btn_clear)
+        queue_actions.addWidget(self.lbl_queue_count)
+        queue_actions.addStretch()
+        l_queue.addLayout(queue_actions)
 
-        # ----------------------------------------------------------------------
-        # 3. BẢNG DANH SÁCH FILE CHỜ MÃ HÓA
-        # ----------------------------------------------------------------------
         self.table_queue = QTableWidget()
-        self.table_queue.setColumnCount(4)
-        self.table_queue.setHorizontalHeaderLabels(["TÊN FILE BÀI GIẢNG", "TIÊU ĐỀ", "MÃ LICENSE", "TRẠNG THÁI"])
-        self.table_queue.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table_queue.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.table_queue.setColumnCount(5)
+        self.table_queue.setHorizontalHeaderLabels(["STT", "TÊN FILE POWERPOINT", "DUNG LƯỢNG", "MÃ LICENSE", "TRẠNG THÁI"])
+        self.table_queue.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table_queue.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_queue.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table_queue.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_queue.setColumnWidth(1, 220)
-        self.table_queue.setFixedHeight(170)
+        self.table_queue.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_queue.setSelectionBehavior(QAbstractItemView.SelectRows)
-        main_layout.addWidget(self.table_queue)
+        self.table_queue.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_queue.verticalHeader().setVisible(False)
+        l_queue.addWidget(self.table_queue)
+
+        main_layout.addWidget(card_queue, stretch=3)
 
         # ----------------------------------------------------------------------
-        # 4. THANH TIẾN TRÌNH & CÁC TÙY CHỌN BẢO MẬT
+        # 3. THANH HÀNH ĐỘNG MÃ HÓA & CẤU HÌNH BẢO MẬT
         # ----------------------------------------------------------------------
-        self.progress_bar = SmoothProgressBar()
-        self.progress_bar.setFixedHeight(6)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar { background-color: #111827; border: none; border-radius: 3px; }
-            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #00F0FF); border-radius: 3px; }
-        """)
-        self.progress_bar.setValue(0)
-        main_layout.addWidget(self.progress_bar)
+        action_card = QFrame()
+        action_card.setStyleSheet("background-color: #0E1524; border: 1px solid #1E293B; border-radius: 14px;")
+        l_action = QVBoxLayout(action_card)
+        l_action.setContentsMargins(16, 14, 16, 14)
+        l_action.setSpacing(10)
 
-        opt_box = QFrame()
-        opt_box.setStyleSheet("background-color: #0E1524; border: 1px solid #1E293B; border-radius: 10px; padding: 6px 12px;")
-        opt_layout = QHBoxLayout(opt_box)
-        opt_layout.setContentsMargins(8, 6, 8, 6)
+        # Dòng máy chủ kích hoạt 1 lần duy nhất (Google Sheets / Cloud URL)
+        server_row = QHBoxLayout()
+        server_row.setSpacing(10)
 
-        self.chk_allow_edit = QCheckBox("Cho phép mở sửa bài giảng (Edit)")
+        lbl_server = QLabel("MÁY CHỦ BẢN QUYỀN:")
+        lbl_server.setStyleSheet("font-size: 11px; font-weight: 700; color: #06B6D4;")
+        self.txt_server_url = QLineEdit()
+        self.txt_server_url.setPlaceholderText("Dán URL Google Apps Script để kích hoạt 1 lần duy nhất (chống chia sẻ file zip chưa giải nén)")
+        self.txt_server_url.setStyleSheet("background-color: #111827; color: #38BDF8; font-family: 'SF Mono', Menlo, Consolas; font-size: 11px;")
+
+        btn_guide = QPushButton("📋 Code & Hướng Dẫn Google Sheets (Miễn Phí)")
+        btn_guide.setCursor(Qt.PointingHandCursor)
+        btn_guide.setStyleSheet("background-color: #1E293B; color: #FACC15; font-size: 11px; font-weight: 700; border: 1px solid #EAB308; padding: 6px 12px;")
+        btn_guide.clicked.connect(self.show_google_sheets_guide)
+
+        server_row.addWidget(lbl_server)
+        server_row.addWidget(self.txt_server_url, stretch=3)
+        server_row.addWidget(btn_guide, stretch=0)
+        l_action.addLayout(server_row)
+
+        # Dòng tùy chọn quyền hạn & Mã máy khách
+        cfg_row = QHBoxLayout()
+        cfg_row.setSpacing(12)
+
+        lbl_hwid = QLabel("MÃ MÁY MAC (HWID):")
+        lbl_hwid.setStyleSheet("font-size: 11px; font-weight: 700; color: #38BDF8;")
+        self.txt_target_hwid = QLineEdit()
+        self.txt_target_hwid.setPlaceholderText("Để trống: Khách tự kích hoạt 1 lần (hoặc nhập mã máy để khóa cứng offline không cần mạng)")
+        self.txt_target_hwid.setStyleSheet("background-color: #111827; color: #FACC15; font-family: 'SF Mono', Menlo, Consolas; font-size: 11px;")
+
+        self.chk_allow_edit = QCheckBox("Cho phép sửa & lưu (Cmd+S)")
         self.chk_allow_edit.setChecked(True)
-        self.chk_allow_edit.setToolTip("Khách hàng có thể gõ chữ, chỉnh sửa nội dung, dán (Cmd+V) và lưu lại (Cmd+S)")
+        self.chk_allow_edit.setStyleSheet("color: #34D399; font-weight: bold;")
 
-        self.chk_block_save_as = QCheckBox("Khóa 'Save As' chống lưu file mới")
+        self.chk_block_save_as = QCheckBox("Cấm 'Save As' & 'Export'")
         self.chk_block_save_as.setChecked(True)
-        self.chk_block_save_as.setToolTip("Ẩn và vô hiệu hóa hoàn toàn Save As, Save a Copy, Export trên PowerPoint Mac")
+        self.chk_block_save_as.setStyleSheet("color: #38BDF8; font-weight: bold;")
 
-        self.chk_block_copy = QCheckBox("Khóa Copy / Sao chép nội dung")
+        self.chk_block_copy = QCheckBox("Cấm 'Copy' (Cmd+C)")
         self.chk_block_copy.setChecked(True)
-        self.chk_block_copy.setToolTip("Khóa Copy/Cut trên Ribbon và Context Menu")
+        self.chk_block_copy.setStyleSheet("color: #F87171; font-weight: bold;")
 
-        self.chk_create_zip = QCheckBox("Đóng gói .zip bảo lưu quyền macOS")
-        self.chk_create_zip.setChecked(True)
-        self.chk_create_zip.setToolTip("Tự động xuất file .zip chứa file .encppt và script Mo_...command có quyền thực thi sẵn")
+        cfg_row.addWidget(lbl_hwid)
+        cfg_row.addWidget(self.txt_target_hwid, stretch=2)
+        cfg_row.addWidget(self.chk_allow_edit)
+        cfg_row.addWidget(self.chk_block_save_as)
+        cfg_row.addWidget(self.chk_block_copy)
+        l_action.addLayout(cfg_row)
 
-        opt_layout.addWidget(self.chk_allow_edit)
-        opt_layout.addWidget(self.chk_block_save_as)
-        opt_layout.addWidget(self.chk_block_copy)
-        opt_layout.addWidget(self.chk_create_zip)
-        opt_layout.addStretch()
+        # Nút bấm hành động
+        act_row = QHBoxLayout()
+        act_row.setSpacing(10)
 
-        self.btn_start_encode = QPushButton("⚡ BẮT ĐẦU MÃ HÓA & ĐÓNG GÓI MACBOOK")
-        self.btn_start_encode.setCursor(Qt.PointingHandCursor)
-        self.btn_start_encode.setStyleSheet("""
+        self.btn_encode = QPushButton("BẮT ĐẦU MÃ HÓA & ĐÓNG GÓI .ZIP (0 FILE)")
+        self.btn_encode.setCursor(Qt.PointingHandCursor)
+        self.btn_encode.setEnabled(False)
+        self.btn_encode.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #06B6D4);
-                color: #FFFFFF; font-weight: 800; padding: 10px 20px; border-radius: 8px; border: none; font-size: 12px; letter-spacing: 0.5px;
+                color: #FFFFFF; font-size: 13px; font-weight: 800;
+                padding: 12px 20px; border-radius: 10px; border: none; letter-spacing: 0.8px;
             }
             QPushButton:hover { background: #0369A1; }
+            QPushButton:disabled { background: #1E293B; color: #475569; }
         """)
-        self.btn_start_encode.clicked.connect(self.start_batch_encode)
-        opt_layout.addWidget(self.btn_start_encode)
+        self.btn_encode.clicked.connect(self.start_batch_encoding)
 
-        main_layout.addWidget(opt_box)
+        self.btn_open_result = QPushButton("Mở thư mục Result (.zip)")
+        self.btn_open_result.setCursor(Qt.PointingHandCursor)
+        self.btn_open_result.clicked.connect(self.open_result_dir)
 
-        # ----------------------------------------------------------------------
-        # 5. BẢNG GIÁM SÁT BẢN QUYỀN THỜI GIAN THỰC (LIVE CLIENT MONITOR)
-        # ----------------------------------------------------------------------
-        live_header = QHBoxLayout()
-        lbl_live = QLabel("BẢNG GIÁM SÁT BẢN QUYỀN MACBOOK THỜI GIAN THỰC (AUTO-LOCK & REVOKE)")
-        lbl_live.setStyleSheet("font-size: 13px; font-weight: 800; color: #38BDF8; letter-spacing: 0.8px;")
-        live_header.addWidget(lbl_live)
-        live_header.addStretch()
+        btn_test_open = QPushButton("Mở file mã hóa để kiểm tra")
+        btn_test_open.setCursor(Qt.PointingHandCursor)
+        btn_test_open.setStyleSheet("background-color: #1E293B; color: #34D399; font-weight: 700; border: 1px solid #059669;")
+        btn_test_open.clicked.connect(self.open_encrypted_to_edit)
 
-        btn_open_result = QPushButton("Mở Thư Mục Result Mac")
-        btn_open_result.setCursor(Qt.PointingHandCursor)
-        btn_open_result.clicked.connect(self.open_result_dir)
-        live_header.addWidget(btn_open_result)
+        act_row.addWidget(self.btn_encode, stretch=3)
+        act_row.addWidget(self.btn_open_result, stretch=1)
+        act_row.addWidget(btn_test_open, stretch=1)
+        l_action.addLayout(act_row)
 
-        btn_open_dash = QPushButton("Mở Web Dashboard")
-        btn_open_dash.setCursor(Qt.PointingHandCursor)
-        btn_open_dash.clicked.connect(self.open_web_dashboard)
-        live_header.addWidget(btn_open_dash)
+        self.smooth_progress = SmoothProgressBar()
+        self.smooth_progress.setFixedHeight(6)
+        self.smooth_progress.setTextVisible(False)
+        self.smooth_progress.setStyleSheet("""
+            QProgressBar { background-color: #111827; border: 1px solid #1E293B; border-radius: 3px; }
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284C7, stop:1 #00F0FF); border-radius: 2px; }
+        """)
+        self.smooth_progress.hide()
+        l_action.addWidget(self.smooth_progress)
 
-        main_layout.addLayout(live_header)
+        self.lbl_status = QLabel("Hệ thống sẵn sàng xử lý. Mỗi bài giảng sẽ xuất ra 1 file nén .zip độc lập cho MacBook.")
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        self.lbl_status.setStyleSheet("font-size: 11px; color: #64748B; font-weight: 500;")
+        l_action.addWidget(self.lbl_status)
 
-        self.table_clients = QTableWidget()
-        self.table_clients.setColumnCount(7)
-        self.table_clients.setHorizontalHeaderLabels([
-            "MÃ LICENSE", "TIÊU ĐỀ BÀI GIẢNG", "MÃ MÁY ĐÃ GHIM (HWID)",
-            "TRẠNG THÁI", "NGÀY TẠO", "KÍCH HOẠT LÚC", "THAO TÁC QUẢN TRỊ"
-        ])
-        self.table_clients.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.table_clients.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_clients.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table_clients.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table_clients.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_clients.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.table_clients.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.table_clients.setSelectionBehavior(QAbstractItemView.SelectRows)
-        main_layout.addWidget(self.table_clients)
+        main_layout.addWidget(action_card, stretch=0)
 
-        self.load_client_records()
+    def show_google_sheets_guide(self):
+        dlg = GoogleSheetsGuideDialog(self)
+        dlg.exec_()
 
-    def open_file_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Chọn một hoặc nhiều bài giảng PowerPoint",
-            "", "PowerPoint Files (*.pptx *.pptm *.ppt);;All Files (*.*)"
-        )
-        if files:
-            self.add_files_to_queue(files)
+    def load_config(self):
+        cfg_path = os.path.join(self.app_dir, "config.json")
+        if os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    self.txt_server_url.setText(cfg.get("server_url", ""))
+            except Exception:
+                pass
 
-    def add_files_to_queue(self, file_paths):
-        for fp in file_paths:
-            if fp not in [it["path"] for it in self.queued_files]:
-                base_name = os.path.splitext(os.path.basename(fp))[0]
-                lic_code = generate_license_code()
-                self.queued_files.append({
-                    "path": fp,
-                    "title": base_name,
-                    "license_id": lic_code
-                })
-        self.refresh_queue_table()
-
-    def refresh_queue_table(self):
-        self.table_queue.setRowCount(len(self.queued_files))
-        for row, item in enumerate(self.queued_files):
-            it_name = QTableWidgetItem(os.path.basename(item["path"]))
-            it_title = QTableWidgetItem(item["title"])
-            it_lic = QTableWidgetItem(item["license_id"])
-            it_lic.setFont(QFont("SF Mono, Menlo, Consolas", 10, QFont.Bold))
-            it_lic.setForeground(QColor("#38BDF8"))
-            it_status = QTableWidgetItem("Sẵn sàng")
-            it_status.setForeground(QColor("#94A3B8"))
-
-            self.table_queue.setItem(row, 0, it_name)
-            self.table_queue.setItem(row, 1, it_title)
-            self.table_queue.setItem(row, 2, it_lic)
-            self.table_queue.setItem(row, 3, it_status)
-
-    def clear_queue(self):
-        self.queued_files.clear()
-        self.table_queue.setRowCount(0)
-        self.progress_bar.setValue(0)
-
-    def start_batch_encode(self):
-        if not self.queued_files:
-            TechNotificationDialog("Thông báo", "Vui lòng chọn hoặc kéo thả ít nhất 1 file PowerPoint vào danh sách!", self).exec_()
-            return
-
-        server_url = self.txt_server_url.text().strip()
-        allow_edit = self.chk_allow_edit.isChecked()
-        block_save_as = self.chk_block_save_as.isChecked()
-        block_copy = self.chk_block_copy.isChecked()
-        create_zip = self.chk_create_zip.isChecked()
-
-        self.btn_start_encode.setEnabled(False)
-        self.progress_bar.setValue(0)
-
-        self.worker = BatchEncodeWorkerMac(
-            file_items=self.queued_files,
-            server_url=server_url,
-            result_dir=RESULT_DIR,
-            allow_edit=allow_edit,
-            block_save_as=block_save_as,
-            block_copy=block_copy,
-            create_zip=create_zip
-        )
-        self.worker.row_status_signal.connect(self.on_row_status_update)
-        self.worker.overall_progress_signal.connect(self.on_overall_progress)
-        self.worker.finished_signal.connect(self.on_batch_finished)
-        self.worker.start()
-
-    def on_row_status_update(self, row, text, color_hex):
-        item = QTableWidgetItem(text)
-        item.setForeground(QColor(color_hex))
-        item.setFont(QFont("Arial", 10, QFont.Bold))
-        self.table_queue.setItem(row, 3, item)
-
-    def on_overall_progress(self, current, total, text):
-        pct = int((current / total) * 100)
-        self.progress_bar.setValueSmooth(pct)
-
-    def on_batch_finished(self, success, failed):
-        self.btn_start_encode.setEnabled(True)
-        self.load_client_records()
-        msg = f"Đã hoàn thành mã hóa {success} bài giảng cho MacBook!\n\n"
-        if failed > 0:
-            msg += f"Có {failed} bài giảng gặp lỗi.\n\n"
-        msg += f"Các gói cài đặt và file Mo_...command đã được xuất vào thư mục:\n{RESULT_DIR}\n\nBạn có thể gửi file .zip cho học viên Mac ngay bây giờ."
-        TechNotificationDialog("Mã Hóa Hoàn Tất", msg, self).exec_()
-
-    def load_client_records(self):
-        if not os.path.exists(DB_FILE):
-            return
-
+    def save_config(self):
+        cfg_path = os.path.join(self.app_dir, "config.json")
         try:
-            with sqlite3.connect(DB_FILE) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT license_id, title, bound_hwid, status, created_at, activated_at
-                    FROM licenses ORDER BY created_at DESC
-                """)
-                rows = cursor.fetchall()
-
-            self.table_clients.setRowCount(len(rows))
-            for r_idx, r in enumerate(rows):
-                lic_id, title, hwid, status, created_at, activated_at = r
-
-                it_lic = QTableWidgetItem(lic_id)
-                it_lic.setFont(QFont("SF Mono, Menlo, Consolas", 10, QFont.Bold))
-                it_lic.setForeground(QColor("#38BDF8"))
-
-                it_title = QTableWidgetItem(title or "—")
-                it_hwid = QTableWidgetItem(hwid if hwid else "— Chờ mở lần đầu —")
-                it_hwid.setFont(QFont("SF Mono, Menlo, Consolas", 9))
-                it_hwid.setForeground(QColor("#00F0FF" if hwid else "#64748B"))
-
-                # Status Badge
-                it_status = QTableWidgetItem()
-                if status == "ACTIVATED":
-                    it_status.setText("ĐÃ GHIM MÁY")
-                    it_status.setForeground(QColor("#34D399"))
-                elif status == "REVOKED":
-                    it_status.setText("ĐÃ THU HỒI")
-                    it_status.setForeground(QColor("#F87171"))
-                else:
-                    it_status.setText("CHỜ MỞ (PENDING)")
-                    it_status.setForeground(QColor("#FBBF24"))
-                it_status.setFont(QFont("Arial", 9, QFont.Bold))
-
-                it_created = QTableWidgetItem(created_at or "—")
-                it_created.setForeground(QColor("#94A3B8"))
-
-                it_activated = QTableWidgetItem(activated_at or "—")
-                it_activated.setForeground(QColor("#94A3B8"))
-
-                self.table_clients.setItem(r_idx, 0, it_lic)
-                self.table_clients.setItem(r_idx, 1, it_title)
-                self.table_clients.setItem(r_idx, 2, it_hwid)
-                self.table_clients.setItem(r_idx, 3, it_status)
-                self.table_clients.setItem(r_idx, 4, it_created)
-                self.table_clients.setItem(r_idx, 5, it_activated)
-
-                # Nút Thao Tác
-                action_widget = QWidget()
-                act_layout = QHBoxLayout(action_widget)
-                act_layout.setContentsMargins(4, 2, 4, 2)
-                act_layout.setSpacing(6)
-
-                if status == "REVOKED":
-                    btn_restore = QPushButton("Khôi phục")
-                    btn_restore.setCursor(Qt.PointingHandCursor)
-                    btn_restore.setStyleSheet("background-color: rgba(52, 211, 153, 0.15); color: #34D399; border: 1px solid #059669; padding: 4px 8px; border-radius: 4px; font-size: 11px;")
-                    btn_restore.clicked.connect(lambda _, l=lic_id: self.action_restore(l))
-                    act_layout.addWidget(btn_restore)
-                else:
-                    if hwid:
-                        btn_reset = QPushButton("Đổi máy")
-                        btn_reset.setCursor(Qt.PointingHandCursor)
-                        btn_reset.setStyleSheet("background-color: rgba(250, 204, 21, 0.15); color: #FACC15; border: 1px solid #A16207; padding: 4px 8px; border-radius: 4px; font-size: 11px;")
-                        btn_reset.clicked.connect(lambda _, l=lic_id: self.action_reset(l))
-                        act_layout.addWidget(btn_reset)
-
-                    btn_revoke = QPushButton("Thu hồi")
-                    btn_revoke.setCursor(Qt.PointingHandCursor)
-                    btn_revoke.setStyleSheet("background-color: rgba(239, 68, 68, 0.15); color: #F87171; border: 1px solid #991B1B; padding: 4px 8px; border-radius: 4px; font-size: 11px;")
-                    btn_revoke.clicked.connect(lambda _, l=lic_id: self.action_revoke(l))
-                    act_layout.addWidget(btn_revoke)
-
-                self.table_clients.setCellWidget(r_idx, 6, action_widget)
-
-        except Exception as e:
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                json.dump({"server_url": self.txt_server_url.text().strip()}, f, ensure_ascii=False, indent=2)
+        except Exception:
             pass
-
-    def action_revoke(self, license_id):
-        dlg = TechConfirmDialog("Xác nhận thu hồi", f"Bạn có chắc muốn THU HỒI bản quyền mã:\n{license_id}?\n\nNgười dùng máy Mac này sẽ bị chặn mở bài giảng ngay lập tức!", "Thu hồi ngay", self)
-        if dlg.exec_() == QDialog.Accepted:
-            with sqlite3.connect(DB_FILE) as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE licenses SET status = 'REVOKED' WHERE license_id = ?", (license_id,))
-                conn.commit()
-            self.load_client_records()
-
-    def action_reset(self, license_id):
-        dlg = TechConfirmDialog("Xác nhận đổi máy tính", f"Cho phép khách hàng chuyển bài giảng mã:\n{license_id} sang một máy Mac khác?\n\nMã máy cũ sẽ được gỡ bỏ và máy Mac mới mở file sẽ được ghim thay thế.", "Đổi máy tính", self)
-        if dlg.exec_() == QDialog.Accepted:
-            with sqlite3.connect(DB_FILE) as conn:
-                cursor = conn.cursor()
-                cursor.execute("UPDATE licenses SET bound_hwid = NULL, status = 'PENDING', activated_at = NULL WHERE license_id = ?", (license_id,))
-                conn.commit()
-            self.load_client_records()
-
-    def action_restore(self, license_id):
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT bound_hwid FROM licenses WHERE license_id = ?", (license_id,))
-            row = cursor.fetchone()
-            new_st = "ACTIVATED" if row and row[0] else "PENDING"
-            cursor.execute("UPDATE licenses SET status = ? WHERE license_id = ?", (new_st, license_id))
-            conn.commit()
-        self.load_client_records()
 
     def open_result_dir(self):
         if sys.platform == "darwin":
@@ -814,9 +670,167 @@ class LockSlideStudioMacApp(QMainWindow):
         else:
             subprocess.Popen(["xdg-open", RESULT_DIR])
 
-    def open_web_dashboard(self):
-        import webbrowser
-        webbrowser.open("http://127.0.0.1:5000")
+    # --------------------------------------------------------------------------
+    # THAO TÁC FILE & HÀNG ĐỢI
+    # --------------------------------------------------------------------------
+    def browse_multiple_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Chọn file PowerPoint", "", "File PowerPoint (*.pptx *.pptm *.ppt)"
+        )
+        if files:
+            self.add_files_to_queue(files)
+
+    def add_files_to_queue(self, file_paths):
+        existing = {item["path"] for item in self.queued_files}
+        for fp in file_paths:
+            if fp not in existing:
+                base = os.path.splitext(os.path.basename(fp))[0]
+                size_mb = os.path.getsize(fp) / (1024 * 1024)
+                size_str = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{os.path.getsize(fp) / 1024:.0f} KB"
+                self.queued_files.append({
+                    "path": fp,
+                    "name": os.path.basename(fp),
+                    "size": size_str,
+                    "title": base,
+                    "license_id": generate_license_code(),
+                    "status": "Chờ mã hóa"
+                })
+        self.update_queue_table()
+
+    def remove_selected_file(self):
+        selected_rows = sorted(set(index.row() for index in self.table_queue.selectedIndexes()), reverse=True)
+        for row in selected_rows:
+            if 0 <= row < len(self.queued_files):
+                del self.queued_files[row]
+        self.update_queue_table()
+
+    def clear_all_files(self):
+        self.queued_files.clear()
+        self.update_queue_table()
+
+    def update_queue_table(self):
+        self.table_queue.setRowCount(len(self.queued_files))
+        for i, item in enumerate(self.queued_files):
+            stt = QTableWidgetItem(f"{i + 1:02d}")
+            stt.setTextAlignment(Qt.AlignCenter)
+            stt.setForeground(QColor("#64748B"))
+            self.table_queue.setItem(i, 0, stt)
+
+            self.table_queue.setItem(i, 1, QTableWidgetItem(item["name"]))
+
+            sz = QTableWidgetItem(item["size"])
+            sz.setTextAlignment(Qt.AlignCenter)
+            sz.setForeground(QColor("#94A3B8"))
+            self.table_queue.setItem(i, 2, sz)
+
+            lic_item = QTableWidgetItem(item["license_id"])
+            lic_item.setForeground(QColor("#38BDF8"))
+            lic_item.setFont(QFont("SF Mono", 10, QFont.Bold))
+            lic_item.setTextAlignment(Qt.AlignCenter)
+            self.table_queue.setItem(i, 3, lic_item)
+
+            st_item = QTableWidgetItem(item.get("status", "Chờ mã hóa"))
+            st_item.setTextAlignment(Qt.AlignCenter)
+            st_item.setForeground(QColor("#94A3B8"))
+            self.table_queue.setItem(i, 4, st_item)
+
+        count = len(self.queued_files)
+        self.lbl_queue_count.setText(f"{count} FILE ĐÃ SẴN SÀNG")
+        self.btn_encode.setText(f"BẮT ĐẦU MÃ HÓA & ĐÓNG GÓI .ZIP ({count} FILE)")
+        self.btn_encode.setEnabled(count > 0)
+
+    # --------------------------------------------------------------------------
+    # THỰC THI MÃ HÓA BATCH
+    # --------------------------------------------------------------------------
+    def start_batch_encoding(self):
+        if not self.queued_files:
+            return
+
+        target_hwid = self.txt_target_hwid.text().strip().upper()
+        server_url = self.txt_server_url.text().strip()
+        allow_edit = self.chk_allow_edit.isChecked()
+        block_save_as = self.chk_block_save_as.isChecked()
+        block_copy = self.chk_block_copy.isChecked()
+
+        if not server_url and not target_hwid:
+            res = QMessageBox.question(
+                self,
+                "Khuyến nghị bảo mật cho MacBook",
+                "Bạn chưa nhập link Google Sheets (để kích hoạt 1 lần duy nhất) và cũng chưa nhập mã máy Mac khách.\n\n"
+                "• Nếu không dùng Google Sheets: Khách hàng nếu chia sẻ file .zip chưa giải nén thì máy khác vẫn có thể mở được.\n"
+                "• Để chống chia sẻ tuyệt đối: Bạn chỉ cần dán link Google Sheets (hoàn toàn miễn phí, cài đặt 1 phút).\n\n"
+                "Bạn có muốn mở hướng dẫn cài đặt Google Sheets ngay không?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes
+            )
+            if res == QMessageBox.Yes:
+                self.show_google_sheets_guide()
+                return
+            elif res == QMessageBox.Cancel:
+                return
+
+        self.save_config()
+
+        self.btn_encode.setEnabled(False)
+        self.smooth_progress.setMaximum(len(self.queued_files))
+        self.smooth_progress.setValue(0)
+        self.smooth_progress.show()
+
+        self.worker = BatchEncodeWorkerMac(
+            file_items=self.queued_files,
+            result_dir=RESULT_DIR,
+            allow_edit=allow_edit,
+            block_save_as=block_save_as,
+            block_copy=block_copy,
+            bound_hwid=target_hwid,
+            server_url=server_url
+        )
+        self.worker.row_status_signal.connect(self.on_row_status_update)
+        self.worker.overall_progress_signal.connect(self.on_overall_progress_update)
+        self.worker.finished_signal.connect(self.on_batch_finished)
+        self.worker.start()
+
+    def on_row_status_update(self, row, text, color_hex):
+        if row < self.table_queue.rowCount():
+            item = QTableWidgetItem(text)
+            item.setForeground(QColor(color_hex))
+            item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            item.setTextAlignment(Qt.AlignCenter)
+            self.table_queue.setItem(row, 4, item)
+
+    def on_overall_progress_update(self, current, total, text):
+        self.smooth_progress.setValueSmooth(current)
+        self.lbl_status.setText(f"TIẾN TRÌNH // {current}/{total} FILE : {text}")
+        self.lbl_status.setStyleSheet("font-size: 11px; color: #38BDF8; font-weight: 700;")
+
+    def on_batch_finished(self, success_count, fail_count):
+        self.btn_encode.setEnabled(True)
+        self.smooth_progress.hide()
+        self.lbl_status.setText(f"HOÀN TẤT // Đã xuất {success_count} file .zip cho MacBook, {fail_count} file thất bại.")
+        self.lbl_status.setStyleSheet("font-size: 11px; color: #34D399; font-weight: 700;")
+
+        msg_body = (
+            f"Hệ thống đã mã hóa và đóng gói thành công {success_count} bài giảng cho MacBook!\n\n"
+            f"Mỗi bài giảng đã được đóng gói thành 1 TẬP NÉN (.ZIP) riêng biệt tại:\n"
+            f"{RESULT_DIR}\n\n"
+            f"Đặc tính bảo vệ tuyệt đối trên macOS:\n"
+            f"• Bạn chỉ cần gửi file .zip của bài giảng đó cho khách hàng dùng Mac.\n"
+            f"• Khách hàng giải nén và nhấp đúp file 'Mo_[Tên].command' để mở bài giảng.\n"
+            f"• Bài giảng sẽ TỰ ĐỘNG KHÓA VÀ GHIM CỐ ĐỊNH VÀO MÁY MAC ĐÓ ngay lần mở đầu tiên.\n"
+            f"• Nếu khách copy chuyển sang bất kỳ máy tính nào khác -> KHÔNG THỂ MỞ ĐƯỢC!\n"
+            f"• Khách hàng vẫn có thể gõ sửa bài và bấm Lưu (Cmd+S) bình thường.\n"
+            f"• Chặn tuyệt đối Save As và Copy để bảo vệ 100% bản quyền tài liệu."
+        )
+        dlg = TechNotificationDialog("XUẤT BẢN FILE NÉN THÀNH CÔNG", msg_body, self)
+        dlg.exec_()
+
+    def open_encrypted_to_edit(self):
+        """Mở nhanh một bài giảng mã hóa để kiểm tra hoặc chỉnh sửa"""
+        f, _ = QFileDialog.getOpenFileName(
+            self, "Chọn bài giảng mã hóa cần mở", RESULT_DIR, "Bài giảng bảo mật (*.encppt *.zip);;Tất cả file (*.*)"
+        )
+        if f and os.path.exists(f):
+            subprocess.Popen([sys.executable, os.path.join(self.app_dir, "editor_player_mac.py"), f])
 
 
 def main():
@@ -826,6 +840,7 @@ def main():
     win.show()
     sys.exit(app.exec_())
 
-
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
     main()

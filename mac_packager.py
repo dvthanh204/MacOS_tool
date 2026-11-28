@@ -3,7 +3,8 @@ Module: mac_packager.py
 Bộ đóng gói phân phối bài giảng bảo mật LockSlide cho người dùng MacBook (macOS)
 - Tạo cấu trúc thư mục phân phối chuẩn macOS
 - Sinh file Mo_[Tên_Bài].command với quyền thực thi (chmod +x)
-- Tùy chọn đóng gói ra file .zip bảo lưu toàn bộ POSIX attributes cho macOS
+- Sinh file hướng dẫn mở bài HUONG_DAN_MO_BAI.txt
+- Tự động nén thành file .zip độc lập, bảo lưu quyền thực thi Unix (0755) cho macOS
 """
 
 import os
@@ -81,9 +82,10 @@ def package_for_mac(
     Đóng gói gói học liệu hoàn chỉnh cho MacBook:
     - [Tên]_PROTECTED.encppt
     - Mo_[Tên].command
-    - editor_player_mac.py, crypto_engine_mac.py, ribbon_policy_mac.py
-    - LAY_MA_MAY.command
-    - File .zip bảo lưu quyền thực thi macOS
+    - editor_player_mac.py, crypto_engine_mac.py, ribbon_policy_mac.py, client_hwid_tool_mac.py
+    - LAY_MA_MAY_MAC.command
+    - HUONG_DAN_MO_BAI.txt
+    - File .zip bảo lưu quyền thực thi macOS (POSIX 0755)
     """
     if app_root_dir is None:
         app_root_dir = os.path.dirname(os.path.abspath(__file__))
@@ -127,9 +129,39 @@ python3 client_hwid_tool_mac.py || python client_hwid_tool_mac.py
     with open(hwid_cmd, "w", encoding="utf-8", newline="\n") as f:
         f.write(hwid_script)
 
+    if sys.platform != "win32":
+        try:
+            os.chmod(hwid_cmd, 0o755)
+        except Exception:
+            pass
+
+    # Tạo file hướng dẫn cho khách hàng MacBook
+    readme_text = f"""================================================================================
+       HƯỚNG DẪN MỞ & SỬ DỤNG BÀI GIẢNG BẢO MẬT TRÊN MACBOOK: {base_name}
+================================================================================
+
+1. CÁCH MỞ BÀI GIẢNG TRÊN MACBOOK:
+   - Nhấp đúp vào file "Mo_{base_name}.command" để khởi chạy.
+   - Nếu macOS hỏi quyền mở file lần đầu: Nhấp chuột phải (hoặc giữ phím Control và click)
+     vào file "Mo_{base_name}.command" -> Chọn "Open" (Mở) -> Bấm "Open".
+
+2. QUY ĐỊNH BẢN QUYỀN THIẾT BỊ (TOFU AUTO-LOCK):
+   - Bài giảng sẽ TỰ ĐỘNG KHÓA VÀ GHIM CỐ ĐỊNH VÀO MÁY MAC NÀY ngay lần mở đầu tiên.
+   - Nếu copy chuyển sang máy Mac hoặc PC khác, bài giảng sẽ KHÔNG THỂ MỞ ĐƯỢC!
+
+3. QUYỀN CHỈNH SỬA & BẢO VỆ:
+   - Bạn có thể gõ sửa nội dung, dán hình ảnh/văn bản và bấm Lưu (Cmd+S) bình thường.
+   - Mọi thay đổi khi lưu sẽ tự động được mã hóa an toàn vào bài giảng.
+   - Chức năng Save As và Copy bị chặn để bảo vệ bản quyền tài liệu.
+================================================================================
+"""
+    readme_path = os.path.join(output_dir, "HUONG_DAN_MO_BAI.txt")
+    with open(readme_path, "w", encoding="utf-8") as f_rm:
+        f_rm.write(readme_text)
+
     zip_path = None
     if create_zip:
-        zip_filename = f"{base_name}_MacOS_Package.zip"
+        zip_filename = f"{base_name}.zip"
         zip_path = os.path.join(os.path.dirname(output_dir), zip_filename)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             folder_prefix = f"{base_name}/"
@@ -152,6 +184,13 @@ python3 client_hwid_tool_mac.py || python client_hwid_tool_mac.py
                         z_info.external_attr = (0o100644) << 16  # -rw-r--r--
                     with open(full_p, "rb") as fp:
                         zf.writestr(z_info, fp.read())
+
+        # Đồng thời tạo file {base_name}_MacOS_Package.zip để tương thích hoàn toàn
+        pkg_zip_path = os.path.join(os.path.dirname(output_dir), f"{base_name}_MacOS_Package.zip")
+        try:
+            shutil.copy2(zip_path, pkg_zip_path)
+        except Exception:
+            pass
 
     return {
         "enc_path": enc_path,

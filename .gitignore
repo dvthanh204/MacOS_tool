@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.DS_Store
+result_mac/
+test_output_dist/
+extracted_pkg/
+test_dist_pkg_mac/
+test_zip_sync_dir/
+*.tmp*
+.mac_lockslide_*

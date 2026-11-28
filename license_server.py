@@ -8,6 +8,7 @@ Tương thích hoàn toàn với kiến trúc của LockSlide Studio:
 - Cho phép khách đổi sang máy khác (Device Reset)
 - Khôi phục bản quyền sau khi đã thu hồi (Restore)
 - Cung cấp giao diện Web Dashboard quản lý trực quan
+- Hỗ trợ cả giao thức GET (chuẩn Google Apps Script) và POST JSON (/api/verify_or_bind)
 """
 
 import os
@@ -47,7 +48,14 @@ def init_db():
 init_db()
 
 
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
+def dashboard_or_api():
+    """Nếu request chứa tham số bản quyền (chuẩn Google Apps Script), xử lý kích hoạt. Ngược lại hiển thị Dashboard."""
+    if request.args.get("action") or request.args.get("license_id"):
+        return verify_or_bind()
+    return dashboard()
+
+
 def dashboard():
     """Giao diện Web Dashboard quản lý bản quyền bài giảng"""
     with _db_lock:
@@ -61,118 +69,81 @@ def dashboard():
     <html lang="vi">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Bảng Điều Khiển Bản Quyền LockSlide Studio macOS</title>
+        <title>LockSlide Studio - Bảng Điều Khiển Bản Quyền</title>
         <style>
-            * { box-sizing: border-box; }
-            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0A0E17; color: #F8FAFC; padding: 25px; margin: 0; }
-            .container { max-width: 1160px; margin: auto; }
-            .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1E293B; padding-bottom: 16px; margin-bottom: 24px; }
-            h1 { color: #38BDF8; margin: 0; font-size: 24px; letter-spacing: 0.5px; }
-            p.sub { color: #94A3B8; margin: 5px 0 0 0; font-size: 13px; }
-            .card { background: #0E1524; border: 1px solid #1E293B; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.4); }
-            table { width: 100%; border-collapse: collapse; text-align: left; }
-            th, td { padding: 14px 18px; border-bottom: 1px solid #1A2333; font-size: 13px; }
-            th { background: #111A2E; color: #00F0FF; font-weight: 700; letter-spacing: 0.5px; }
-            tr:hover { background: #131E33; }
-            .badge { padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; display: inline-block; }
-            .badge-active { background: rgba(16, 185, 129, 0.2); color: #34D399; border: 1px solid #059669; }
-            .badge-pending { background: rgba(245, 158, 11, 0.2); color: #FBBF24; border: 1px solid #D97706; }
-            .badge-revoked { background: rgba(239, 68, 68, 0.2); color: #F87171; border: 1px solid #DC2626; }
-            .hwid { font-family: 'SF Mono', Menlo, Consolas, monospace; color: #38BDF8; font-weight: bold; }
-            .btn { background: #1E293B; color: #F8FAFC; border: 1px solid #334155; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600; text-decoration: none; display: inline-block; transition: all 0.2s; }
-            .btn:hover { background: #334155; }
-            .btn-danger { color: #F87171; border-color: #991B1B; background: rgba(239, 68, 68, 0.1); }
-            .btn-danger:hover { background: #DC2626; color: white; }
-            .btn-reset { color: #FACC15; border-color: #A16207; background: rgba(250, 204, 21, 0.1); }
-            .btn-reset:hover { background: #D97706; color: white; }
-            .btn-restore { color: #34D399; border-color: #059669; background: rgba(52, 211, 153, 0.1); }
-            .btn-restore:hover { background: #059669; color: white; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0A0E17; color: #E2E8F0; margin: 0; padding: 24px; }
+            h1 { color: #38BDF8; font-size: 20px; font-weight: 800; letter-spacing: 1px; }
+            table { width: 100%; border-collapse: collapse; margin-top: 16px; background-color: #0E1524; border-radius: 8px; overflow: hidden; border: 1px solid #1E293B; }
+            th { background-color: #111827; color: #94A3B8; text-align: left; padding: 12px; font-size: 11px; text-transform: uppercase; }
+            td { padding: 12px; border-bottom: 1px solid #1E293B; font-size: 12px; }
+            tr:hover { background-color: #161F30; }
+            .badge-act { background-color: rgba(16, 185, 129, 0.2); color: #34D399; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+            .badge-pen { background-color: rgba(245, 158, 11, 0.2); color: #FBBF24; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+            .badge-rev { background-color: rgba(239, 68, 68, 0.2); color: #F87171; padding: 4px 8px; border-radius: 4px; font-weight: bold; }
+            .btn { padding: 6px 12px; border-radius: 6px; border: none; font-size: 11px; font-weight: bold; cursor: pointer; text-decoration: none; margin-right: 4px; }
+            .btn-rev { background-color: #EF4444; color: white; }
+            .btn-res { background-color: #3B82F6; color: white; }
+            .btn-rst { background-color: #10B981; color: white; }
         </style>
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <div>
-                    <h1> BẢNG ĐIỀU KHIỂN BẢN QUYỀN LOCKSLIDE STUDIO (MACBOOK)</h1>
-                    <p class="sub">Hệ thống nhận diện & tự động ghim thiết bị Mac đầu tiên mở bài giảng (Auto-Lock on First Run)</p>
-                </div>
-            </div>
-
-            <div class="card">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>MÃ LICENSE</th>
-                            <th>TIÊU ĐỀ BÀI GIẢNG</th>
-                            <th>MÃ MÁY ĐÃ GHIM (MAC HWID)</th>
-                            <th>TRẠNG THÁI</th>
-                            <th>NGÀY TẠO</th>
-                            <th>KÍCH HOẠT LÚC</th>
-                            <th>THAO TÁC</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for r in rows %}
-                        <tr>
-                            <td style="font-family: 'SF Mono', Menlo, Consolas, monospace; font-weight: bold; color: #38BDF8;">{{ r[0] }}</td>
-                            <td>{{ r[1] }}</td>
-                            <td class="hwid">{{ r[2] if r[2] else '— Chưa mở —' }}</td>
-                            <td>
-                                {% if r[3] == 'ACTIVATED' %}
-                                    <span class="badge badge-active">ĐÃ GHIM MÁY</span>
-                                {% elif r[3] == 'PENDING' %}
-                                    <span class="badge badge-pending">CHỜ MỞ LẦN ĐẦU</span>
-                                {% else %}
-                                    <span class="badge badge-revoked">ĐÃ THU HỒI</span>
-                                {% endif %}
-                            </td>
-                            <td style="color: #94A3B8;">{{ r[4] }}</td>
-                            <td style="color: #94A3B8;">{{ r[5] if r[5] else '—' }}</td>
-                            <td>
-                                {% if r[3] == 'REVOKED' %}
-                                <form method="POST" action="/api/restore" style="display:inline;">
-                                    <input type="hidden" name="license_id" value="{{ r[0] }}">
-                                    <button type="submit" class="btn btn-restore" title="Khôi phục quyền mở bài giảng">Khôi phục</button>
-                                </form>
-                                {% else %}
-                                {% if r[2] %}
-                                <form method="POST" action="/api/reset" style="display:inline;">
-                                    <input type="hidden" name="license_id" value="{{ r[0] }}">
-                                    <button type="submit" class="btn btn-reset" title="Cho phép khách đổi sang máy Mac khác">Đổi máy</button>
-                                </form>
-                                {% endif %}
-                                <form method="POST" action="/api/revoke" style="display:inline;">
-                                    <input type="hidden" name="license_id" value="{{ r[0] }}">
-                                    <button type="submit" class="btn btn-danger" title="Thu hồi bản quyền - Chặn mở bài">Thu hồi</button>
-                                </form>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="7" style="text-align: center; color: #64748B; padding: 30px;">Chưa có tài liệu nào được mã hóa trong hệ thống.</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
+        <h1> LOCKSLIDE STUDIO // QUẢN TRỊ BẢN QUYỀN TRÊN MACOS & WINDOWS</h1>
+        <table>
+            <thead>
+                <tr>
+                    <th>Mã License</th>
+                    <th>Tên Bài Giảng</th>
+                    <th>Mã Máy Đã Ghim (HWID)</th>
+                    <th>Trạng Thái</th>
+                    <th>Ngày Tạo</th>
+                    <th>Ngày Kích Hoạt</th>
+                    <th>IP Gần Nhất</th>
+                    <th>Hành Động</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in rows %}
+                <tr>
+                    <td style="font-family: monospace; color: #38BDF8; font-weight: bold;">{{ r[0] }}</td>
+                    <td>{{ r[1] }}</td>
+                    <td style="font-family: monospace; color: #E2E8F0;">{{ r[2] or 'Chưa kích hoạt' }}</td>
+                    <td>
+                        {% if r[3] == 'ACTIVATED' %}<span class="badge-act">ACTIVATED</span>
+                        {% elif r[3] == 'PENDING' %}<span class="badge-pen">PENDING</span>
+                        {% else %}<span class="badge-rev">{{ r[3] }}</span>{% endif %}
+                    </td>
+                    <td>{{ r[4] }}</td>
+                    <td>{{ r[5] or '-' }}</td>
+                    <td>{{ r[6] or '-' }}</td>
+                    <td>
+                        <a href="/action/revoke?id={{ r[0] }}" class="btn btn-rev">Thu hồi</a>
+                        <a href="/action/reset?id={{ r[0] }}" class="btn btn-res">Đổi máy</a>
+                        <a href="/action/restore?id={{ r[0] }}" class="btn btn-rst">Khôi phục</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
     </body>
     </html>
     """
     return render_template_string(html, rows=rows)
 
 
-@app.route("/api/verify_or_bind", methods=["POST"])
+@app.route("/api/verify_or_bind", methods=["GET", "POST"])
 def verify_or_bind():
     """
     API cốt lõi: Xác thực hoặc Tự động ghim thiết bị (TOFU - Trust On First Use)
+    Hỗ trợ cả POST JSON và GET query parameters (tương thích Google Apps Script).
     """
-    try:
-        data = request.get_json(force=True)
-    except Exception:
-        return jsonify({"status": "error", "message": "Dữ liệu JSON không hợp lệ"}), 400
+    data = {}
+    if request.method == "POST":
+        try:
+            data = request.get_json(force=True, silent=True) or {}
+        except Exception:
+            data = {}
+    if not data:
+        data = request.args.to_dict()
 
     license_id = data.get("license_id", "").strip().upper()
     hwid = data.get("hwid", "").strip().upper()
@@ -180,7 +151,7 @@ def verify_or_bind():
     client_ip = request.remote_addr
 
     if not license_id or not hwid:
-        return jsonify({"status": "error", "message": "Thiếu mã License hoặc mã máy HWID"}), 400
+        return jsonify({"status": "ERROR", "message": "Thiếu mã License hoặc mã máy HWID"}), 400
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -203,8 +174,9 @@ def verify_or_bind():
 
             if status == "REVOKED":
                 return jsonify({
-                    "status": "error",
-                    "message": "Bản quyền bài giảng này đã bị thu hồi bởi tác giả! Không thể truy cập."
+                    "status": "REJECTED",
+                    "message": "Bản quyền bài giảng này đã bị thu hồi bởi tác giả! Không thể truy cập.",
+                    "bound_hwid": bound_hwid or ""
                 }), 403
 
             # Trường hợp 1: Mở lần đầu tiên (PENDING) -> Tự động ghim vào máy tính này
@@ -216,7 +188,7 @@ def verify_or_bind():
                 """, (hwid, now_str, client_ip, license_id))
                 conn.commit()
                 return jsonify({
-                    "status": "success",
+                    "status": "SUCCESS",
                     "message": "Đã tự động ghim bản quyền bài giảng vào thiết bị này!",
                     "license_id": license_id,
                     "bound_hwid": hwid
@@ -227,88 +199,56 @@ def verify_or_bind():
                 cursor.execute("UPDATE licenses SET last_ip = ? WHERE license_id = ?", (client_ip, license_id))
                 conn.commit()
                 return jsonify({
-                    "status": "success",
-                    "message": "Bản quyền hợp lệ! Cho phép mở bài giảng.",
+                    "status": "SUCCESS",
+                    "message": "Bản quyền hợp lệ!",
                     "license_id": license_id,
                     "bound_hwid": bound_hwid
                 })
             else:
+                # BỊ TỪ CHỐI: Máy thứ 2 cố tình mở
                 return jsonify({
-                    "status": "error",
-                    "message": (
-                        f"BẢN QUYỀN ĐÃ ĐƯỢC KÍCH HOẠT TRÊN THIẾT BỊ KHÁC!\n\n"
-                        f"Mã máy hợp lệ: {bound_hwid}\n"
-                        f"Mã máy của bạn: {hwid}\n"
-                        f"Hệ thống không cho phép chia sẻ file cho người khác."
-                    )
+                    "status": "REJECTED",
+                    "message": "Lượt mở của bài giảng này đã được sử dụng hết trên một máy MacBook khác!",
+                    "bound_hwid": bound_hwid,
+                    "attempted_hwid": hwid
                 }), 403
 
 
-@app.route("/api/revoke", methods=["POST"])
-def revoke_license():
-    license_id = (request.form.get("license_id") or (request.json and request.json.get("license_id")) or "").strip().upper()
-    if not license_id:
-        return jsonify({"status": "error", "message": "Thiếu license_id"}), 400
-
-    with _db_lock:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE licenses SET status = 'REVOKED' WHERE license_id = ?", (license_id,))
-            conn.commit()
-
-    if request.form:
-        from flask import redirect
-        return redirect("/")
-    return jsonify({"status": "success", "message": f"Đã thu hồi bản quyền {license_id}"})
+@app.route("/action/revoke")
+def action_revoke():
+    lic_id = request.args.get("id", "").strip().upper()
+    if lic_id:
+        with _db_lock:
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("UPDATE licenses SET status = 'REVOKED' WHERE license_id = ?", (lic_id,))
+    return "<script>location.href='/';</script>"
 
 
-@app.route("/api/reset", methods=["POST"])
-def reset_license():
-    """Cho phép khách đổi sang máy khác (xóa bound_hwid để máy mới ghim lại)"""
-    license_id = (request.form.get("license_id") or (request.json and request.json.get("license_id")) or "").strip().upper()
-    if not license_id:
-        return jsonify({"status": "error", "message": "Thiếu license_id"}), 400
-
-    with _db_lock:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE licenses SET bound_hwid = NULL, status = 'PENDING', activated_at = NULL WHERE license_id = ?", (license_id,))
-            conn.commit()
-
-    if request.form:
-        from flask import redirect
-        return redirect("/")
-    return jsonify({"status": "success", "message": f"Đã reset thiết bị cho {license_id}. Khách có thể mở trên máy Mac mới."})
+@app.route("/action/reset")
+def action_reset():
+    lic_id = request.args.get("id", "").strip().upper()
+    if lic_id:
+        with _db_lock:
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("UPDATE licenses SET bound_hwid = NULL, status = 'PENDING', activated_at = NULL WHERE license_id = ?", (lic_id,))
+    return "<script>location.href='/';</script>"
 
 
-@app.route("/api/restore", methods=["POST"])
-def restore_license():
-    license_id = (request.form.get("license_id") or (request.json and request.json.get("license_id")) or "").strip().upper()
-    if not license_id:
-        return jsonify({"status": "error", "message": "Thiếu license_id"}), 400
-
-    with _db_lock:
-        with sqlite3.connect(DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT bound_hwid FROM licenses WHERE license_id = ?", (license_id,))
-            row = cursor.fetchone()
-            new_status = "ACTIVATED" if row and row[0] else "PENDING"
-            cursor.execute("UPDATE licenses SET status = ? WHERE license_id = ?", (new_status, license_id))
-            conn.commit()
-
-    if request.form:
-        from flask import redirect
-        return redirect("/")
-    return jsonify({"status": "success", "message": f"Đã khôi phục bản quyền {license_id}"})
+@app.route("/action/restore")
+def action_restore():
+    lic_id = request.args.get("id", "").strip().upper()
+    if lic_id:
+        with _db_lock:
+            with sqlite3.connect(DB_FILE) as conn:
+                conn.execute("UPDATE licenses SET status = 'ACTIVATED' WHERE license_id = ?", (lic_id,))
+    return "<script>location.href='/';</script>"
 
 
-def start_server_in_background(host="0.0.0.0", port=5000):
+def start_server_in_background(host="127.0.0.1", port=5000):
     t = threading.Thread(target=lambda: app.run(host=host, port=port, debug=False, use_reloader=False), daemon=True)
     t.start()
     return t
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[*] LockSlide Server đang chạy tại http://127.0.0.1:{port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=5000, debug=True)
